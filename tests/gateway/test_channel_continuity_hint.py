@@ -127,8 +127,15 @@ class TestBuildChannelContinuityNote:
         note = build_channel_continuity_note(entry, _telegram_source())
 
         assert "Prior-session state of play" in note
+        assert "UNTRUSTED bot-authored context" in note
+        assert "fence=" in note
+        assert "End prior-session state of play fence=" in note
         assert "preserving latent commitments" in note
         assert "session_search" in note
+
+    def test_unsafe_previous_session_id_is_rejected(self):
+        entry = _reset_entry(Platform.TELEGRAM, prev="../../escape")
+        assert build_channel_continuity_note(entry, _telegram_source()) is None
 
 
     def test_no_activity_returns_none(self):

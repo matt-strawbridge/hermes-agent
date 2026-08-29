@@ -123,6 +123,16 @@ class TestConfiguredStdoutBudget(unittest.TestCase):
         self.assertIn("FULL output saved", metadata["warning"])
         self.assertLess(len(text), 2_200)
 
+    def test_remote_kernel_runner_spills_clipped_stdout(self):
+        from tools.code_kernel_remote import REMOTE_KERNEL_RUNNER_SOURCE
+
+        rendered = REMOTE_KERNEL_RUNNER_SOURCE.format(
+            capture_limit=2_000,
+            idle_exit=60,
+        )
+        self.assertIn("cell_spill_", rendered)
+        self.assertIn('"stdout_spill_path": stdout_spill_path', rendered)
+
 
 class TestInterruptedOutput(unittest.TestCase):
     def tearDown(self):

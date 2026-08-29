@@ -74,10 +74,16 @@ IDLE_EXIT_SECONDS = {idle_exit}
 GLOBALS = {{"__name__": "__main__", "__builtins__": __builtins__}}
 
 
-def _bounded(text):
+def _bounded(text, kind, cell_id):
     if len(text) <= CAPTURE_LIMIT:
-        return text, False
-    return text[:CAPTURE_LIMIT], True
+        return text, False, ""
+    safe_id = "".join(c for c in str(cell_id) if c.isalnum())[:48] or "cell"
+    spill_path = os.path.join(CELLS, "cell_spill_" + safe_id + "_" + kind + ".txt")
+    with open(spill_path, "w", encoding="utf-8", errors="replace") as spill:
+        spill.write(text)
+    head = int(CAPTURE_LIMIT * 0.4)
+    tail = CAPTURE_LIMIT - head
+    return text[:head] + "\n\n[... output truncated ...]\n\n" + text[-tail:], True, spill_path
 
 
 def main():
@@ -116,8 +122,13 @@ def main():
             except BaseException:
                 status = "error"
                 trace = traceback.format_exc()
-            stdout_text, stdout_clipped = _bounded(out.getvalue())
-            stderr_text, stderr_clipped = _bounded(err.getvalue())
+            cell_id = request.get("id", "")
+            stdout_text, stdout_clipped, stdout_spill_path = _bounded(
+                out.getvalue(), "stdout", cell_id
+            )
+            stderr_text, stderr_clipped, stderr_spill_path = _bounded(
+                err.getvalue(), "stderr", cell_id
+            )
             payload = {{
                 "id": request.get("id", ""),
                 "status": status,
@@ -125,6 +136,8 @@ def main():
                 "stderr": stderr_text,
                 "stdout_clipped": stdout_clipped,
                 "stderr_clipped": stderr_clipped,
+                "stdout_spill_path": stdout_spill_path,
+                "stderr_spill_path": stderr_spill_path,
                 "traceback": trace,
                 "execution_count": execution_count,
             }}
@@ -227,7 +240,7 @@ def _spawn_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
                          idle_exit: int) -> Optional[RemoteKernel]:
     """Start a detached kernel runner on the remote. None on failure."""
     from tools.code_execution_tool import (
-        MAX_STDOUT_BYTES,
+        _get_max_stdout_bytes,
         _ship_file_to_remote,
         _env_temp_dir,
         generate_hermes_tools_module,
@@ -241,7 +254,7 @@ def _spawn_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
 
         rpc_token = _secrets.token_urlsafe(32)
         runner_src = REMOTE_KERNEL_RUNNER_SOURCE.format(
-            capture_limit=MAX_STDOUT_BYTES,
+            capture_limit=_get_max_stdout_bytes(),
             idle_exit=idle_exit,
         )
         _ship_file_to_remote(env, f"{kernel_dir}/kernel_runner.py", runner_src)
@@ -475,6 +488,8 @@ def execute_in_remote_kernel(
         "traceback": cell_payload.get("traceback", ""),
         "stdout_clipped": bool(cell_payload.get("stdout_clipped")),
         "stderr_clipped": bool(cell_payload.get("stderr_clipped")),
+        "stdout_spill_path": str(cell_payload.get("stdout_spill_path") or ""),
+        "stderr_spill_path": str(cell_payload.get("stderr_spill_path") or ""),
         "tool_calls_made": tool_call_counter[0],
         "kernel": {
             "reused": reused,

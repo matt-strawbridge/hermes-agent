@@ -32,6 +32,10 @@ from gateway.session_context import declare_stateless_channel
 from hermes_cli.fallback_config import get_fallback_chain
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _normalize_toolsets(toolsets: object = None) -> list[str] | None:
     if not toolsets:
         return None
@@ -249,6 +253,11 @@ def run_oneshot(
         sys.stderr.write(toolsets_error)
         return 2
     use_config_toolsets = _normalize_toolsets(toolsets) is None
+    if _env_flag("HERMES_ONESHOT_NO_TOOLS"):
+        # An explicit empty list is distinct from None: None means inherit the
+        # CLI platform config, while [] means construct an agent with no tools.
+        explicit_toolsets = []
+        use_config_toolsets = False
 
     # Auto-approve any shell / tool approvals.  Non-interactive by
     # definition — a prompt would hang forever.
@@ -441,7 +450,11 @@ def _run_agent(
     # Pull in explicit toolsets when provided; otherwise use whatever the user
     # has enabled for "cli". sorted() gives stable ordering for config-derived
     # sets; explicit values preserve user order.
-    toolsets_list = _normalize_toolsets(toolsets)
+    toolsets_list = (
+        []
+        if isinstance(toolsets, list) and not toolsets and not use_config_toolsets
+        else _normalize_toolsets(toolsets)
+    )
     if toolsets_list is None and use_config_toolsets:
         toolsets_list = sorted(_get_platform_tools(cfg, "cli"))
 
@@ -461,7 +474,11 @@ def _run_agent(
 
     skills_prompt = _build_preloaded_skills_prompt(skills)
 
-    session_db = _create_session_db_for_oneshot()
+    session_db = (
+        None
+        if _env_flag("HERMES_ONESHOT_NO_SESSION_PERSISTENCE")
+        else _create_session_db_for_oneshot()
+    )
     # The try spans agent construction (not just ``chat``) so the SQLite store
     # opened above is always closed — including when ``AIAgent(...)`` itself
     # raises on a provider/config error. The one-shot exit path hard-exits via

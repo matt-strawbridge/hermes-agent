@@ -1805,7 +1805,16 @@ def execute_code(
 
         stdout_total_bytes = [0]  # mutable ref for total bytes seen
 
-        def _drain_head_tail(pipe, head_chunks, tail_chunks, head_bytes, tail_bytes, total_ref):
+        def _drain_head_tail(
+            pipe,
+            head_chunks,
+            tail_chunks,
+            head_bytes,
+            tail_bytes,
+            total_ref,
+            full_capture,
+            full_captured_ref,
+        ):
             """Drain stdout keeping both head and tail data."""
             head_collected = 0
             from collections import deque
@@ -1817,6 +1826,12 @@ def execute_code(
                     if not data:
                         break
                     total_ref[0] += len(data)
+                    if full_captured_ref[0] < MAX_SPILLED_STDOUT_BYTES:
+                        keep_full = data[
+                            : MAX_SPILLED_STDOUT_BYTES - full_captured_ref[0]
+                        ]
+                        full_capture.write(keep_full)
+                        full_captured_ref[0] += len(keep_full)
                     # Fill head buffer first
                     if head_collected < head_bytes:
                         keep = min(len(data), head_bytes - head_collected)
@@ -1839,11 +1854,16 @@ def execute_code(
 
         stdout_head_chunks: list = []
         stdout_tail_chunks: list = []
+        stdout_full_capture = tempfile.SpooledTemporaryFile(
+            max_size=1_000_000, mode="w+b"
+        )
+        stdout_full_captured = [0]
 
         stdout_reader = threading.Thread(
             target=_drain_head_tail,
             args=(proc.stdout, stdout_head_chunks, stdout_tail_chunks,
-                  _STDOUT_HEAD_BYTES, _STDOUT_TAIL_BYTES, stdout_total_bytes),
+                  _STDOUT_HEAD_BYTES, _STDOUT_TAIL_BYTES, stdout_total_bytes,
+                  stdout_full_capture, stdout_full_captured),
             daemon=True
         )
         stderr_reader = threading.Thread(
@@ -1896,6 +1916,17 @@ def execute_code(
             b"".join(stdout_tail_chunks),
             total_bytes=stdout_total_bytes[0],
         )
+        stdout_full_capture.seek(0)
+        full_stdout_text = stdout_full_capture.read().decode(
+            "utf-8", errors="replace"
+        )
+        stdout_full_capture.close()
+        if stdout_total_bytes[0] > stdout_full_captured[0]:
+            full_stdout_text += (
+                f"\n\n[... spill capped at {MAX_SPILLED_STDOUT_BYTES:,} bytes; "
+                f"{stdout_total_bytes[0] - stdout_full_captured[0]:,} additional "
+                "bytes omitted ...]"
+            )
 
         exit_code = proc.returncode if proc.returncode is not None else -1
         duration = round(time.monotonic() - exec_start, 2)
@@ -1921,6 +1952,19 @@ def execute_code(
         from agent.redact import redact_sensitive_text
         stdout_text = redact_sensitive_text(stdout_text, code_file=True)
         stderr_text = redact_sensitive_text(stderr_text, code_file=True)
+        if stdout_metadata.get("stdout_truncated"):
+            full_stdout_text = redact_sensitive_text(
+                strip_ansi(full_stdout_text), code_file=True
+            )
+            spill_path = _spill_full_stdout(full_stdout_text)
+            if spill_path:
+                stdout_metadata["stdout_spill_path"] = spill_path
+                stdout_metadata["warning"] = (
+                    "execute_code stdout was truncated (head/tail shown); the "
+                    f"script did run. FULL output saved to {spill_path} — page "
+                    f'it with read_file(path="{spill_path}", offset=...) '
+                    "instead of re-running."
+                )
 
         # Build response
         result: Dict[str, Any] = {

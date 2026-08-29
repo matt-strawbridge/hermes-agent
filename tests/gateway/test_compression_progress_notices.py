@@ -149,3 +149,14 @@ def test_failure_notice_can_be_opted_in(monkeypatch):
     )
     message = "⚠ Context compression timed out after 180.0s."
     assert _prepare_gateway_status_message("telegram", "warn", message) == message
+
+
+def test_internal_critical_marker_never_leaks_to_raw_surfaces():
+    marked = (
+        "[[HERMES_CONTEXT_CRITICAL]] ⚠ Context is over the compression "
+        "threshold."
+    )
+    for platform in ("local", "api_server", "webhook", "msgraph_webhook"):
+        result = _prepare_gateway_status_message(platform, "warn", marked)
+        assert result == "⚠ Context is over the compression threshold."
+        assert "HERMES_CONTEXT_CRITICAL" not in result

@@ -474,9 +474,12 @@ def _append_bounded(chunks: List[bytes], total: List[int], data: bytes, cap: int
 
 def _stdout_reader(kernel: SessionKernel) -> None:
     """Split the child's stdout into protocol frames and raw passthrough."""
-    from tools.code_execution_tool import _get_max_stdout_bytes
+    from tools.code_execution_tool import MAX_SPILLED_STDOUT_BYTES
 
-    max_stdout_bytes = _get_max_stdout_bytes()
+    # Raw passthrough is truncated/spilled by _truncate_stdout_text after the
+    # cell completes. Capture up to the explicit spill ceiling here; using the
+    # inline display cap would silently drop bytes before persistence can run.
+    max_stdout_bytes = MAX_SPILLED_STDOUT_BYTES
 
     assert kernel.proc is not None and kernel.proc.stdout is not None
     stream = kernel.proc.stdout

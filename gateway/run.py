@@ -160,8 +160,6 @@ _COMPRESSION_FAILURE_STATUS_RE = re.compile(
     r"|context\s+compression\s+commit\s+is\s+taking"
     r"|context\s+is\s+over\s+the\s+compression\s+threshold"
     r"|compression\s+summary\s+failed"
-    r"|configured\s+auxiliary\s+compression\s+provider\s+.+\s+unavailable"
-    r"|skipping\s+concurrent\s+compression"
     r"|context\s+compression\s+(?:failed|aborted|could\s+not)"
     r")",
     re.IGNORECASE | re.DOTALL,
@@ -889,13 +887,13 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     text = str(message or "").strip()
     if not text:
         return None
+    is_context_critical = _CONTEXT_CRITICAL_MARKER in text
+    if is_context_critical:
+        text = text.replace(_CONTEXT_CRITICAL_MARKER, "", 1).lstrip()
     if _gateway_surface_passes_raw_text(platform):
         return text
 
     text = _redact_gateway_user_facing_secrets(text)
-    is_context_critical = _CONTEXT_CRITICAL_MARKER in text
-    if is_context_critical:
-        text = text.replace(_CONTEXT_CRITICAL_MARKER, "", 1).lstrip()
     if _COMPRESSION_FAILURE_STATUS_RE.search(text):
         if is_context_critical or _gateway_compression_failure_notices_enabled():
             return text

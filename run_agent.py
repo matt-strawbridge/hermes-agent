@@ -1017,8 +1017,11 @@ class AIAgent:
         such as auxiliary compression or memory flushes where the main turn can
         continue but the user needs to know something important failed.
         """
+        display_message = str(message).replace(
+            "[[HERMES_CONTEXT_CRITICAL]]", "", 1
+        ).lstrip()
         try:
-            self._vprint(f"{self.log_prefix}{message}", force=True)
+            self._vprint(f"{self.log_prefix}{display_message}", force=True)
         except Exception:
             pass
         if self.status_callback:
@@ -1047,7 +1050,20 @@ class AIAgent:
         again on the next blocked-over-threshold turn.
         """
         _warn_kind = (reason or "unknown").split(":", 1)[0]
-        _warn_key = ("ctx_overflow_blocked", _warn_kind)
+        compressor = getattr(self, "context_compressor", None)
+        real_tokens = int(
+            getattr(compressor, "last_real_prompt_tokens", 0) or 0
+        )
+        context_length = int(getattr(compressor, "context_length", 0) or 0)
+        is_critical = (
+            real_tokens > 0
+            and context_length > 0
+            and real_tokens >= int(context_length * 0.85)
+        )
+        # Include the escalation state in the dedup key. A below-critical
+        # warning is intentionally swallowed by chat gateways; if the same
+        # block later crosses 85% real usage, it must be allowed to fire once.
+        _warn_key = ("ctx_overflow_blocked", _warn_kind, is_critical)
         if getattr(self, "_last_ctx_overflow_warn", None) != _warn_key:
             self._last_ctx_overflow_warn = _warn_key
             from agent.conversation_compression import (
@@ -1064,16 +1080,7 @@ class AIAgent:
                 threshold=threshold_tokens,
                 reason=reason,
             )
-            compressor = getattr(self, "context_compressor", None)
-            real_tokens = int(
-                getattr(compressor, "last_real_prompt_tokens", 0) or 0
-            )
-            context_length = int(getattr(compressor, "context_length", 0) or 0)
-            if (
-                real_tokens > 0
-                and context_length > 0
-                and real_tokens >= int(context_length * 0.85)
-            ):
+            if is_critical:
                 warning = "[[HERMES_CONTEXT_CRITICAL]] " + warning
             self._emit_warning(warning)
 
