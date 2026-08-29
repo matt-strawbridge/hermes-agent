@@ -1019,8 +1019,11 @@ def resolve_compression_fallback_route() -> Optional[dict]:
     """
     try:
         from agent.auxiliary_client import (
+            _candidate_context_window,
             _fallback_entry_api_key,
+            _fallback_route_extra_body,
             _get_auxiliary_task_config,
+            _task_minimum_context_length,
         )
 
         chain = _get_auxiliary_task_config("compression").get("fallback_chain")
@@ -1029,6 +1032,7 @@ def resolve_compression_fallback_route() -> Optional[dict]:
         return None
     if not isinstance(chain, list):
         return None
+    min_ctx = _task_minimum_context_length("compression")
 
     for index, entry in enumerate(chain):
         if not isinstance(entry, dict):
@@ -1048,6 +1052,24 @@ def resolve_compression_fallback_route() -> Optional[dict]:
                 exc_info=True,
             )
             api_key = None
+        if min_ctx is not None:
+            candidate_ctx = _candidate_context_window(
+                provider,
+                model,
+                base_url=str(entry.get("base_url") or ""),
+                api_key=api_key or "",
+            )
+            if candidate_ctx is not None and candidate_ctx < min_ctx:
+                logger.info(
+                    "Compression stall fallback: skipping fallback_chain[%d](%s) "
+                    "(%s context=%d < min=%d)",
+                    index,
+                    provider,
+                    model,
+                    candidate_ctx,
+                    min_ctx,
+                )
+                continue
         from agent.auxiliary_client import _coerce_positive_timeout
 
         timeout = _coerce_positive_timeout(entry.get("timeout"))
@@ -1061,6 +1083,7 @@ def resolve_compression_fallback_route() -> Optional[dict]:
                 entry.get("api_mode") or entry.get("transport") or ""
             ).strip() or None,
             "timeout": timeout,
+            "extra_body": _fallback_route_extra_body(entry),
         }
     return None
 

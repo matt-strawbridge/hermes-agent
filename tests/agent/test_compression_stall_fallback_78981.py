@@ -41,6 +41,7 @@ CHAIN_ENTRY = {
     "base_url": "https://fallback.invalid/v1",
     "api_key": "sk-fallback",
     "timeout": 45,
+    "reasoning_effort": "high",
 }
 
 
@@ -247,6 +248,10 @@ def test_resolved_route_carries_entry_credentials_and_timeout():
     # Per-entry timeouts already govern aux-client fallback candidates
     # (#62452); the stall retry honours the same declaration.
     assert route["timeout"] == 45.0
+    assert route["extra_body"]["reasoning"] == {
+        "enabled": True,
+        "effort": "high",
+    }
 
 
 def test_incomplete_chain_entries_are_skipped():
@@ -266,6 +271,23 @@ def test_incomplete_chain_entries_are_skipped():
 def test_no_chain_resolves_to_no_route():
     with _patch_chain([]):
         assert resolve_compression_fallback_route() is None
+
+
+def test_stall_route_skips_known_too_small_candidate():
+    chain = [
+        {"provider": "custom", "model": "tiny"},
+        CHAIN_ENTRY,
+    ]
+    with _patch_chain(chain), patch(
+        "agent.auxiliary_client._candidate_context_window",
+        side_effect=lambda _provider, model, **_kwargs: (
+            32_000 if model == "tiny" else 200_000
+        ),
+    ):
+        route = resolve_compression_fallback_route()
+
+    assert route is not None
+    assert route["model"] == "backup-summarizer"
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +328,11 @@ def test_pinned_route_overrides_the_summary_call_route():
         calls.append(kwargs)
         return _ok_response()
 
+    with _patch_chain([CHAIN_ENTRY]):
+        route = resolve_compression_fallback_route()
+    assert route is not None
     with patch("agent.context_compressor.call_llm", side_effect=_fake_call_llm):
-        with pin_summary_route(dict(CHAIN_ENTRY)):
+        with pin_summary_route(route):
             summary = compressor._generate_summary(_msgs())
 
     assert summary and "SUMMARY BODY" in summary
@@ -319,6 +344,10 @@ def test_pinned_route_overrides_the_summary_call_route():
     assert call["base_url"] == "https://fallback.invalid/v1"
     assert call["api_key"] == "sk-fallback"
     assert call["timeout"] == 45
+    assert call["extra_body"]["reasoning"] == {
+        "enabled": True,
+        "effort": "high",
+    }
 
 
 def test_pinned_route_is_not_reissued_by_the_main_model_retry():

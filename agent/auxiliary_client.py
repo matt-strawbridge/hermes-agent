@@ -5188,6 +5188,38 @@ def _fallback_entry_timeout(task: Optional[str], fb_label: str) -> Optional[floa
     return _coerce_positive_timeout(raw)
 
 
+def _fallback_route_extra_body(
+    entry: Optional[Dict[str, Any]],
+    base: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge per-entry wire controls over task-level auxiliary controls.
+
+    A fallback may need a different reasoning depth than the primary route.
+    The entry's explicit extra_body.reasoning wins; otherwise the
+    reasoning_effort shorthand is parsed through Hermes's canonical effort
+    vocabulary and written as extra_body.reasoning.
+    """
+    result = dict(base or {})
+    if not isinstance(entry, dict):
+        return result
+    entry_body = entry.get("extra_body")
+    if isinstance(entry_body, dict):
+        result.update(entry_body)
+    if not (isinstance(entry_body, dict) and "reasoning" in entry_body):
+        effort = entry.get("reasoning_effort")
+        if effort not in (None, ""):
+            from hermes_constants import parse_reasoning_effort
+
+            parsed = parse_reasoning_effort(effort)
+            if parsed is not None:
+                result["reasoning"] = parsed
+            else:
+                logger.warning(
+                    "Ignoring invalid fallback reasoning_effort %r", effort
+                )
+    return result
+
+
 def _fallback_provider_from_label(label: str) -> str:
     """Recover the provider identifier from a fallback display label."""
     match = re.match(
@@ -5351,6 +5383,9 @@ def _call_fallback_candidate_sync(
         max_tokens=max_tokens,
         extra_body=effective_extra_body,
     )
+    fallback_extra_body = _fallback_route_extra_body(
+        fallback_entry, fallback_extra_body
+    )
     fallback_messages, fallback_tools = _replan_synchronous_cache_sections(
         messages,
         tools,
@@ -5495,6 +5530,10 @@ async def _call_fallback_candidate_async(
         )
         effective_timeout = fb_timeout
     destination = _fallback_destination(task, fb_client, fb_model, fb_label)
+    fallback_entry = _fallback_chain_entry(task, fb_label) or {}
+    fallback_extra_body = _fallback_route_extra_body(
+        fallback_entry, effective_extra_body
+    )
     fallback_messages, fallback_tools = _replan_synchronous_cache_sections(
         messages,
         tools,
@@ -5504,7 +5543,7 @@ async def _call_fallback_candidate_async(
         destination.provider, destination.model, fallback_messages,
         temperature=temperature, max_tokens=max_tokens,
         tools=fallback_tools, timeout=effective_timeout,
-        extra_body=effective_extra_body, reasoning_config=reasoning_config,
+        extra_body=fallback_extra_body, reasoning_config=reasoning_config,
         base_url=destination.base_url, task=task)
     try:
         return _validate_llm_response(

@@ -104,6 +104,7 @@ _PINNED_ROUTE_FIELDS: tuple[str, ...] = (
     "api_key",
     "api_mode",
     "timeout",
+    "extra_body",
 )
 
 
