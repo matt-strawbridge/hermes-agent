@@ -23431,6 +23431,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # ``None`` as "use the platform default"; falling back on an empty
         # route policy would silently widen it to every platform tool.
         if override is not None and isinstance(override, list):
+            if not override:
+                return []
             cfg = dict(user_config)
             pts = dict(cfg.get("platform_toolsets") or {})
             pts[platform_key] = [str(t) for t in override]

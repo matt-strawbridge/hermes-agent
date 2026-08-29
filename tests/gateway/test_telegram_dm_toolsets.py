@@ -1,7 +1,6 @@
 """Least-privilege tool policies for authorized Telegram private chats."""
 
 from gateway.run import GatewayRunner
-from hermes_cli.tools_config import _get_platform_tools
 from plugins.platforms.telegram.adapter import TelegramAdapter
 
 
@@ -87,11 +86,5 @@ class TestEmptyRouteOverride:
             config,
             _Source(),
             "telegram",
-        )
-        assert resolved == sorted(
-            _get_platform_tools(
-                {"platform_toolsets": {"telegram": []}},
-                "telegram",
-            )
         )
         assert resolved == []
