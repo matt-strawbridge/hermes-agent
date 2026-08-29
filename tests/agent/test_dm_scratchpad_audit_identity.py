@@ -1,5 +1,5 @@
 from agent.tool_executor import _inject_authenticated_dm_scratchpad_requester
-from gateway.session_context import reset_session_vars, set_session_vars
+from gateway.session_context import clear_session_vars, set_session_vars
 
 
 def test_authenticated_context_overrides_model_supplied_requester():
@@ -10,7 +10,7 @@ def test_authenticated_context_overrides_model_supplied_requester():
             {"query": "lantern", "requester": "Fake Admin"},
         )
     finally:
-        reset_session_vars(tokens)
+        clear_session_vars(tokens)
     assert result["requester"] == "Matt Satterberg (832202205)"
 
 
