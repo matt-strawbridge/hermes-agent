@@ -23426,7 +23426,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except Exception:
             override = None
 
-        if override and isinstance(override, list):
+        # ``[]`` is a meaningful fail-closed override: a route may be allowed
+        # to converse while receiving no model tools at all.  Treat only
+        # ``None`` as "use the platform default"; falling back on an empty
+        # route policy would silently widen it to every platform tool.
+        if override is not None and isinstance(override, list):
             cfg = dict(user_config)
             pts = dict(cfg.get("platform_toolsets") or {})
             pts[platform_key] = [str(t) for t in override]
