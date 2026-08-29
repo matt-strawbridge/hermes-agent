@@ -61,8 +61,8 @@ NOISY_STATUS_MESSAGES = [
 
 # Messages that must NEVER be swallowed by the compression-noise filter:
 # deliberate carve-outs from routine-compression silence — manual /compress
-# feedback (manual_compression_feedback.py headlines) and abort/failure
-# notices that require user action.
+# feedback (manual_compression_feedback.py headlines) and failures that are
+# not the routine automatic timeout/blocked diagnostics gated separately.
 VISIBLE_COMPRESSION_MESSAGES = [
     "Compressed: 30 → 12 messages",
     "Compression aborted: 30 messages preserved",
@@ -89,12 +89,9 @@ VISIBLE_COMPRESSION_MESSAGES = [
         "compression lock. Another compression may still be running, or "
         "the lock check failed — try again shortly."
     ),
-    # Blocked-overflow warning (#62625/#62708): the context is over the
-    # compression threshold but compression is blocked (summary-LLM cooldown
-    # or the anti-thrash breaker). FAILURE-CLASS — must reach chat users so
-    # they can /new or /compress before the session dies at the hard token
-    # limit. Formatted from the SAME template the emit site uses, so a
-    # rewording that drifts into the noise regex fails here.
+]
+
+AUTOMATIC_BLOCKED_WARNINGS = [
     CONTEXT_OVERFLOW_BLOCKED_WARNING_TEMPLATE.format(
         tokens=85_000, threshold=72_000, reason="cooldown:30"
     ),
@@ -175,6 +172,14 @@ def test_manual_compress_feedback_and_failure_notices_stay_visible(platform, mes
     regex must not start eating them.
     """
     assert _prepare_gateway_status_message(platform, "warn", message) == message
+
+
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS)
+@pytest.mark.parametrize("message", AUTOMATIC_BLOCKED_WARNINGS)
+def test_automatic_blocked_warnings_are_log_only_below_critical_usage(
+    platform, message
+):
+    assert _prepare_gateway_status_message(platform, "warn", message) is None
 
 
 @pytest.mark.parametrize("platform", ["slack", "matrix"])
