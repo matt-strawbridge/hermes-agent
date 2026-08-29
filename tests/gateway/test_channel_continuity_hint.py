@@ -1,11 +1,11 @@
-"""Tests for the lightweight Slack/Discord channel session-continuity hint.
+"""Tests for lightweight persistent-lane session-continuity hints.
 
 Salvaged from PR #36220 (metamon-p), ported onto the current SessionStore.
 
 Covers:
 - SessionStore records the previous session_id on auto-reset (and only then).
 - prev_session_id survives a to_dict() → from_dict() roundtrip (gateway restart).
-- build_channel_continuity_note() emits a hint only for Slack/Discord sessions
+- build_channel_continuity_note() emits a hint only for supported persistent lanes
   that were auto-reset with real prior activity, and stays silent otherwise.
 """
 
@@ -44,6 +44,16 @@ def _slack_source(thread_id=None):
         chat_id="C123",
         chat_type="thread" if thread_id else "channel",
         user_id="U1",
+        thread_id=thread_id,
+    )
+
+
+def _telegram_source(thread_id="6"):
+    return SessionSource(
+        platform=Platform.TELEGRAM,
+        chat_id="-100123",
+        chat_type="group",
+        user_id=None,
         thread_id=thread_id,
     )
 
@@ -97,8 +107,15 @@ class TestBuildChannelContinuityNote:
         assert entry.prev_session_id in note
         assert "channel" in note
 
+    def test_telegram_topic_emits_hint(self):
+        entry = _reset_entry(Platform.TELEGRAM)
+        note = build_channel_continuity_note(entry, _telegram_source())
+        assert note is not None
+        assert "session_search" in note
+        assert entry.prev_session_id in note
+        assert "topic" in note
+
 
     def test_no_activity_returns_none(self):
         entry = _reset_entry(Platform.SLACK, had_activity=False)
         assert build_channel_continuity_note(entry, _slack_source()) is None
-

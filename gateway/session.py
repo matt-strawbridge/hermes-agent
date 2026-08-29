@@ -1010,24 +1010,24 @@ def build_channel_continuity_note(
     entry: "SessionEntry",
     source: SessionSource,
 ) -> Optional[str]:
-    """Build a lightweight session-continuity hint for Slack/Discord channels.
+    """Build a lightweight session-continuity hint for persistent chat lanes.
 
-    Slack and Discord channels/threads are long-lived: when the daily/idle
-    reset policy starts a fresh session, the agent loses the thread's prior
-    context and can mistakenly bind a new request to an unrelated recent
-    session.  This deterministic one-line hint points the agent at the
-    specific prior session in *this* channel/thread so it recalls that
-    context via ``session_search`` before acting.
+    Slack/Discord channels and Telegram forum topics are long-lived: when the
+    daily/idle reset policy starts a fresh session, the agent loses the lane's
+    prior context and can mistakenly bind a new request to an unrelated recent
+    session. This deterministic one-line hint points the agent at the specific
+    prior session in *this* lane so it recalls that context via
+    ``session_search`` before acting.
 
     Returns ``None`` (and the caller adds nothing) unless **all** hold:
-      - the source platform is Slack or Discord,
+      - the source platform is Slack, Discord, or Telegram,
       - this session was created by an auto-reset that had real activity,
       - the previous session_id was recorded on the entry.
 
     No LLM calls, no extra API/DB lookups — the previous session id is
     already known from :meth:`SessionStore.get_or_create_session`.
     """
-    if source.platform not in (Platform.SLACK, Platform.DISCORD):
+    if source.platform not in (Platform.SLACK, Platform.DISCORD, Platform.TELEGRAM):
         return None
     if not getattr(entry, "reset_had_activity", False):
         return None
@@ -1035,7 +1035,10 @@ def build_channel_continuity_note(
     if not prev:
         return None
 
-    where = "thread" if source.thread_id else "channel"
+    if source.platform == Platform.TELEGRAM:
+        where = "topic" if source.thread_id else "group"
+    else:
+        where = "thread" if source.thread_id else "channel"
     return (
         f"[System note: This {where} had an earlier Hermes session "
         f"(session_id: {prev}) that was auto-reset. If the user refers to "
