@@ -55,6 +55,29 @@ from tools.budget_config import BudgetConfig, DEFAULT_BUDGET, budget_for_context
 
 logger = logging.getLogger(__name__)
 
+_DM_SCRATCHPAD_AUDIT_TOOLS = frozenset(
+    {
+        "mcp__dm_scratchpads__search_dm_scratchpads",
+        "mcp__dm_scratchpads__read_dm_scratchpad",
+    }
+)
+
+
+def _inject_authenticated_dm_scratchpad_requester(
+    function_name: str, function_args: dict[str, Any]
+) -> dict[str, Any]:
+    """Override model-supplied audit identity with gateway-authenticated context."""
+    if function_name not in _DM_SCRATCHPAD_AUDIT_TOOLS:
+        return function_args
+    from gateway.session_context import get_session_env
+
+    user_id = str(get_session_env("HERMES_SESSION_USER_ID", "") or "").strip()
+    user_name = str(get_session_env("HERMES_SESSION_USER_NAME", "") or "").strip()
+    authenticated = f"{user_name} ({user_id})" if user_name and user_id else user_id
+    injected = dict(function_args)
+    injected["requester"] = authenticated
+    return injected
+
 
 def _pairing_tool_call_id(tool_call: Any) -> str:
     """Return the canonical id used by the persisted assistant message."""
@@ -1375,7 +1398,9 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                 def _execute(next_args: dict[str, Any]) -> Any:
                     return agent._invoke_tool(
                         function_name,
-                        next_args,
+                        _inject_authenticated_dm_scratchpad_requester(
+                            function_name, next_args
+                        ),
                         effective_task_id,
                         tool_call_id,
                         messages=messages,
@@ -2511,6 +2536,9 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                     from model_tools import suppress_post_tool_call_hook
 
                     with suppress_post_tool_call_hook():
+                        next_args = _inject_authenticated_dm_scratchpad_requester(
+                            function_name, next_args
+                        )
                         return _ra().handle_function_call(
                             function_name,
                             next_args,
@@ -2593,6 +2621,9 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                     from model_tools import suppress_post_tool_call_hook
 
                     with suppress_post_tool_call_hook():
+                        next_args = _inject_authenticated_dm_scratchpad_requester(
+                            function_name, next_args
+                        )
                         return _ra().handle_function_call(
                             function_name,
                             next_args,
