@@ -74,16 +74,14 @@ IDLE_EXIT_SECONDS = {idle_exit}
 GLOBALS = {{"__name__": "__main__", "__builtins__": __builtins__}}
 
 
-def _bounded(text, kind, cell_id):
+def _bounded(text):
     if len(text) <= CAPTURE_LIMIT:
-        return text, False, ""
-    safe_id = "".join(c for c in str(cell_id) if c.isalnum())[:48] or "cell"
-    spill_path = os.path.join(CELLS, "cell_spill_" + safe_id + "_" + kind + ".txt")
-    with open(spill_path, "w", encoding="utf-8", errors="replace") as spill:
-        spill.write(text)
-    head = int(CAPTURE_LIMIT * 0.4)
-    tail = CAPTURE_LIMIT - head
-    return text[:head] + "\n\n[... output truncated ...]\n\n" + text[-tail:], True, spill_path
+        return text, False, len(text)
+    marker = "\n\n[... remote output truncated ...]\n\n"
+    available = max(0, CAPTURE_LIMIT - len(marker))
+    head = int(available * 0.4)
+    tail = available - head
+    return text[:head] + marker + text[-tail:], True, len(text)
 
 
 def main():
@@ -122,13 +120,8 @@ def main():
             except BaseException:
                 status = "error"
                 trace = traceback.format_exc()
-            cell_id = request.get("id", "")
-            stdout_text, stdout_clipped, stdout_spill_path = _bounded(
-                out.getvalue(), "stdout", cell_id
-            )
-            stderr_text, stderr_clipped, stderr_spill_path = _bounded(
-                err.getvalue(), "stderr", cell_id
-            )
+            stdout_text, stdout_clipped, stdout_total_chars = _bounded(out.getvalue())
+            stderr_text, stderr_clipped, stderr_total_chars = _bounded(err.getvalue())
             payload = {{
                 "id": request.get("id", ""),
                 "status": status,
@@ -136,8 +129,8 @@ def main():
                 "stderr": stderr_text,
                 "stdout_clipped": stdout_clipped,
                 "stderr_clipped": stderr_clipped,
-                "stdout_spill_path": stdout_spill_path,
-                "stderr_spill_path": stderr_spill_path,
+                "stdout_total_chars": stdout_total_chars,
+                "stderr_total_chars": stderr_total_chars,
                 "traceback": trace,
                 "execution_count": execution_count,
             }}
@@ -488,8 +481,8 @@ def execute_in_remote_kernel(
         "traceback": cell_payload.get("traceback", ""),
         "stdout_clipped": bool(cell_payload.get("stdout_clipped")),
         "stderr_clipped": bool(cell_payload.get("stderr_clipped")),
-        "stdout_spill_path": str(cell_payload.get("stdout_spill_path") or ""),
-        "stderr_spill_path": str(cell_payload.get("stderr_spill_path") or ""),
+        "stdout_total_chars": int(cell_payload.get("stdout_total_chars", 0) or 0),
+        "stderr_total_chars": int(cell_payload.get("stderr_total_chars", 0) or 0),
         "tool_calls_made": tool_call_counter[0],
         "kernel": {
             "reused": reused,
