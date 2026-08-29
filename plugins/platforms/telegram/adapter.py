@@ -1336,13 +1336,20 @@ class TelegramAdapter(BasePlatformAdapter):
         text = str(prompt or "").strip()
         if not text:
             return False
-        first = " ".join(text[:600].split())
+        raw = re.sub(r"^\[[^\]\n]{1,160}\]\s*", "", text[:600]).lstrip()
+        if re.match(
+            r"^(?:>|forwarded(?:\s+message)?\b|quoted(?:\s+message)?\b|"
+            r"reply\s+context\b|[- ]{2,}forwarded[- ]{2,})",
+            raw,
+            re.IGNORECASE,
+        ):
+            return False
+        first = " ".join(raw.split())
         if re.match(r"^/dmsearch(?:\s|$)", first, re.IGNORECASE):
             return True
         # Strip the normal Telegram author prefix and an optional leading bot
         # mention, then require both an explicit retrieval verb and a DM-lane
         # noun inside the first short instruction.
-        first = re.sub(r"^\[[^\]\n]{1,160}\]\s*", "", first)
         first = re.sub(r"^@[A-Za-z0-9_]+\s*[,,:-]?\s*", "", first)
         head = first[:320]
         verb = re.search(
@@ -1399,6 +1406,12 @@ class TelegramAdapter(BasePlatformAdapter):
             if isinstance(scratchpad_raw, list)
             else []
         )
+        excluded_raw = extra.get("dm_scratchpad_excluded_toolsets", [])
+        scratchpad_excluded = {
+            str(item).strip()
+            for item in excluded_raw
+            if str(item).strip()
+        } if isinstance(excluded_raw, list) else set()
         if is_dm:
             privileged_raw = extra.get("dm_privileged_users", [])
             if isinstance(privileged_raw, str):
@@ -1425,6 +1438,7 @@ class TelegramAdapter(BasePlatformAdapter):
                             str(item).strip()
                             for item in privileged_explicit
                             if str(item).strip()
+                            and str(item).strip() not in scratchpad_excluded
                         ]
                 return None
 
@@ -1439,6 +1453,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return []
         result = [str(item).strip() for item in configured if str(item).strip()]
         if explicit_scratchpad:
+            result = [item for item in result if item not in scratchpad_excluded]
             for item in scratchpad_toolsets:
                 if item not in result:
                     result.append(item)
