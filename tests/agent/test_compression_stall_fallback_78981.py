@@ -21,11 +21,13 @@ These tests pin the contract:
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent.context_compressor import (
     ContextCompressor,
+    attempt_summary_route_kwargs,
     pin_summary_route,
     take_pinned_summary_route,
 )
@@ -45,12 +47,17 @@ CHAIN_ENTRY = {
 }
 
 
+@contextmanager
 def _patch_chain(chain):
     """Pin auxiliary.compression config without touching the real config.yaml."""
-    return patch(
+    with patch(
         "agent.auxiliary_client._get_auxiliary_task_config",
         return_value={"fallback_chain": chain},
-    )
+    ), patch(
+        "agent.auxiliary_client._candidate_context_window",
+        return_value=200_000,
+    ):
+        yield
 
 
 class _StalledSummaryWorker:
@@ -248,7 +255,7 @@ def test_resolved_route_carries_entry_credentials_and_timeout():
     # Per-entry timeouts already govern aux-client fallback candidates
     # (#62452); the stall retry honours the same declaration.
     assert route["timeout"] == 45.0
-    assert route["extra_body"]["reasoning"] == {
+    assert route["route_extra_body"]["reasoning"] == {
         "enabled": True,
         "effort": "high",
     }
@@ -288,6 +295,34 @@ def test_stall_route_skips_known_too_small_candidate():
 
     assert route is not None
     assert route["model"] == "backup-summarizer"
+
+
+def test_stall_route_skips_candidate_on_failed_provider():
+    chain = [
+        {"provider": "anthropic", "model": "claude-opus-5"},
+        CHAIN_ENTRY,
+    ]
+    with _patch_chain(chain):
+        route = resolve_compression_fallback_route(
+            failed_provider="anthropic"
+        )
+    assert route is not None
+    assert route["provider"] == "custom"
+
+
+def test_digest_route_does_not_inherit_summary_reasoning_controls():
+    route = {
+        "provider": "anthropic",
+        "model": "claude-opus-5",
+        "route_extra_body": {
+            "reasoning": {"enabled": True, "effort": "high"},
+        },
+    }
+    with pin_summary_route(route):
+        digest_route = attempt_summary_route_kwargs()
+    assert digest_route["provider"] == "anthropic"
+    assert digest_route["model"] == "claude-opus-5"
+    assert "route_extra_body" not in digest_route
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +379,7 @@ def test_pinned_route_overrides_the_summary_call_route():
     assert call["base_url"] == "https://fallback.invalid/v1"
     assert call["api_key"] == "sk-fallback"
     assert call["timeout"] == 45
-    assert call["extra_body"]["reasoning"] == {
+    assert call["route_extra_body"]["reasoning"] == {
         "enabled": True,
         "effort": "high",
     }

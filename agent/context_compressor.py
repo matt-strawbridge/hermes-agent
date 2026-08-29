@@ -104,7 +104,7 @@ _PINNED_ROUTE_FIELDS: tuple[str, ...] = (
     "api_key",
     "api_mode",
     "timeout",
-    "extra_body",
+    "route_extra_body",
 )
 
 
@@ -157,7 +157,7 @@ def attempt_summary_route_kwargs() -> Dict[str, Any]:
     return {
         field: route[field]
         for field in _PINNED_ROUTE_FIELDS
-        if route.get(field) not in (None, "")
+        if field != "route_extra_body" and route.get(field) not in (None, "")
     }
 
 
@@ -5157,6 +5157,11 @@ the user's correction and record what changed as a result.]
 ## Critical Context
 [Any specific values, error messages, configuration details, or data that would be lost without explicit preservation. NEVER include API keys, tokens, passwords, or credentials — write [REDACTED] instead.]
 
+## Active Task
+[The user's most recent unfulfilled input, including any question, decision
+request, or discussion turn the assistant has not yet answered. Write "None"
+only when the last user exchange in the compacted region was fully resolved.]
+
 {_PRUNED_SKILLS_SECTION_HEADING}
 [If any [SKILL_PRUNED: ...reload with skill_view(...)] markers appear in the input,
 repeat each one verbatim here — copy the exact text, do NOT paraphrase, summarize,
@@ -5332,6 +5337,9 @@ This compaction should PRIORITISE preserving all information related to the focu
             summary = _reinject_pruned_skill_markers(summary, _pruned_skill_names)
             summary = self._ground_historical_task_snapshot(summary, turns_to_summarize)
             summary = self._augment_summary_lean(summary, turns_to_summarize)
+            summary = self._ensure_active_task_section(
+                summary, turns_to_summarize
+            )
             self._validate_summary_user_provenance(summary, has_user_turn)
             # Store for iterative updates on next compaction
             self._previous_summary = summary
@@ -5689,6 +5697,50 @@ This compaction should PRIORITISE preserving all information related to the focu
         ) or text.startswith(
             _LENGTH_CONTINUATION_DROPPED_TOOLS_PREFIX
         )
+
+    @classmethod
+    def _ensure_active_task_section(
+        cls,
+        summary: str,
+        turns: List[Dict[str, Any]],
+    ) -> str:
+        """Deterministically restore the required Active Task section.
+
+        Models occasionally omit the final template heading. Preserve a
+        recent unresolved user turn verbatim (redacted and bounded); otherwise
+        record None. The exact protected tail remains outside this summary.
+        """
+        if re.search(r"(?m)^## Active Task\s*$", summary):
+            return summary
+        last_user_idx = -1
+        last_final_assistant_idx = -1
+        last_user_text = ""
+        for idx, message in enumerate(turns):
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            content = _content_text_for_contains(message.get("content")).strip()
+            if role == "user" and not cls._is_synthetic_compression_user_turn(message):
+                last_user_idx = idx
+                last_user_text = content
+            elif (
+                role == "assistant"
+                and content
+                and not message.get("tool_calls")
+            ):
+                last_final_assistant_idx = idx
+        if last_user_idx > last_final_assistant_idx and last_user_text:
+            active = _redact_compaction_text(last_user_text)
+            if len(active) > 4_000:
+                active = (
+                    active[:2_500].rstrip()
+                    + "\n\n[... unresolved user input bounded ...]\n\n"
+                    + active[-1_000:].lstrip()
+                )
+            body = "Most recent unresolved user input (verbatim):\n" + active
+        else:
+            body = "None"
+        return summary.rstrip() + "\n\n## Active Task\n" + body
 
     @staticmethod
     def _validate_summary_user_provenance(summary: str, has_user_turn: bool) -> None:

@@ -1001,7 +1001,9 @@ def resolve_context_compression_timeouts(
     return idle, ceiling
 
 
-def resolve_compression_fallback_route() -> Optional[dict]:
+def resolve_compression_fallback_route(
+    failed_provider: str = "",
+) -> Optional[dict]:
     """Return the first usable ``auxiliary.compression.fallback_chain`` entry.
 
     The chain is the user's declared answer to "the configured compression
@@ -1043,6 +1045,17 @@ def resolve_compression_fallback_route() -> Optional[dict]:
         # the same rule when the aux client walks this chain itself.
         if not provider or not model:
             continue
+        if (
+            failed_provider
+            and provider.lower() == str(failed_provider).strip().lower()
+        ):
+            logger.info(
+                "Compression stall fallback: skipping fallback_chain[%d](%s) "
+                "because it shares the stalled provider",
+                index,
+                provider,
+            )
+            continue
         try:
             api_key = _fallback_entry_api_key(entry)
         except Exception:
@@ -1083,7 +1096,7 @@ def resolve_compression_fallback_route() -> Optional[dict]:
                 entry.get("api_mode") or entry.get("transport") or ""
             ).strip() or None,
             "timeout": timeout,
-            "extra_body": _fallback_route_extra_body(entry),
+            "route_extra_body": _fallback_route_extra_body(entry),
         }
     return None
 
@@ -1125,7 +1138,37 @@ def _retry_compression_on_fallback_chain(
     if callable(getattr(hard_cancel, "is_set", None)) and hard_cancel.is_set():
         return None
 
-    route = resolve_compression_fallback_route()
+    try:
+        from agent.auxiliary_client import (
+            _get_auxiliary_task_config,
+            _normalize_aux_provider,
+        )
+
+        failed_provider = str(
+            _get_auxiliary_task_config("compression").get("provider") or ""
+        ).strip()
+        if not failed_provider or failed_provider.lower() == "auto":
+            failed_provider = str(
+                getattr(
+                    getattr(telemetry_agent, "context_compressor", None),
+                    "provider",
+                    "",
+                )
+                or ""
+            )
+        failed_provider = _normalize_aux_provider(failed_provider)
+    except Exception:
+        failed_provider = str(
+            getattr(
+                getattr(telemetry_agent, "context_compressor", None),
+                "provider",
+                "",
+            )
+            or ""
+        )
+    route = resolve_compression_fallback_route(
+        failed_provider=failed_provider,
+    )
     if route is None:
         return None
 

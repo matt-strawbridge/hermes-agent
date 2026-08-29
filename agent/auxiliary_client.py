@@ -5454,7 +5454,10 @@ def _call_fallback_candidate_sync(
                     route_config=fallback_entry,
                     leak_guard_config=task_config,
                     max_tokens=max_tokens,
-                    extra_body=effective_extra_body,
+                    extra_body=fallback_extra_body,
+                )
+                retry_extra_body = _fallback_route_extra_body(
+                    fallback_entry, retry_extra_body
                 )
                 retry_kwargs = _build_call_kwargs(
                     retry_destination.provider,
@@ -5588,7 +5591,7 @@ async def _call_fallback_candidate_async(
                     retry_messages,
                     temperature=temperature, max_tokens=max_tokens,
                     tools=retry_tools, timeout=effective_timeout,
-                    extra_body=effective_extra_body,
+                    extra_body=fallback_extra_body,
                     reasoning_config=reasoning_config,
                     base_url=retry_destination.base_url, task=task)
                 try:
@@ -8992,7 +8995,8 @@ def _build_call_kwargs(
 
             _nous_on_messages = nous_api_mode(model) == "anthropic_messages"
         if (
-            _is_anthropic_compat_endpoint(provider, _effective_base)
+            _provider_norm == "anthropic"
+            or _is_anthropic_compat_endpoint(provider, _effective_base)
             or _nous_on_messages
             or _is_nvidia_nim
             or _is_moa
@@ -9646,6 +9650,7 @@ def call_llm(
     tools: list = None,
     timeout: float = None,
     extra_body: dict = None,
+    route_extra_body: dict = None,
     reasoning_config: Optional[dict] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     api_mode: str = None,
@@ -9701,6 +9706,7 @@ def call_llm(
                 tools=tools,
                 timeout=timeout,
                 extra_body=extra_body,
+                route_extra_body=route_extra_body,
                 reasoning_config=reasoning_config,
                 extra_headers=extra_headers,
                 api_mode=api_mode,
@@ -9751,6 +9757,7 @@ def _call_llm_impl(
     tools: list = None,
     timeout: float = None,
     extra_body: dict = None,
+    route_extra_body: dict = None,
     reasoning_config: Optional[dict] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     api_mode: str = None,
@@ -9807,6 +9814,8 @@ def _call_llm_impl(
         resolved_api_mode = api_mode
     effective_extra_body = _get_task_extra_body(task)
     effective_extra_body.update(extra_body or {})
+    primary_extra_body = dict(effective_extra_body)
+    primary_extra_body.update(route_extra_body or {})
     effective_provider = resolved_provider
 
     if task == "vision":
@@ -9893,17 +9902,25 @@ def _call_llm_impl(
     compression_config = (
         _get_auxiliary_task_config("compression") if task == "compression" else {}
     )
-    fast_compression_cap, effective_extra_body = _compression_fast_lane_controls(
-        task,
-        actual_provider=request_provider,
-        actual_model=final_model,
-        requested_provider=provider,
-        requested_model=model,
-        route_config=compression_config,
-        leak_guard_config=compression_config,
-        max_tokens=max_tokens,
-        extra_body=effective_extra_body,
-    )
+    if route_extra_body is not None:
+        # Route-scoped controls belong only to this pinned attempt. Never
+        # certify/cap it from the primary task's fast-lane declaration, and
+        # never seed these controls into later fallback candidates.
+        fast_compression_cap = None
+    else:
+        fast_compression_cap, primary_extra_body = (
+            _compression_fast_lane_controls(
+                task,
+                actual_provider=request_provider,
+                actual_model=final_model,
+                requested_provider=provider,
+                requested_model=model,
+                route_config=compression_config,
+                leak_guard_config=compression_config,
+                max_tokens=max_tokens,
+                extra_body=primary_extra_body,
+            )
+        )
     _set_relay_auxiliary_route(
         request_provider,
         final_model,
@@ -9926,7 +9943,7 @@ def _call_llm_impl(
     kwargs = _build_call_kwargs(
         request_provider, final_model, messages,
         temperature=temperature, max_tokens=max_tokens,
-        tools=tools, timeout=effective_timeout, extra_body=effective_extra_body,
+        tools=tools, timeout=effective_timeout, extra_body=primary_extra_body,
         reasoning_config=reasoning_config,
         base_url=_base_info or resolved_base_url, task=task)
     if fast_compression_cap is not None and max_tokens is None:
@@ -10294,7 +10311,7 @@ def _call_llm_impl(
                     max_tokens=max_tokens,
                     tools=tools,
                     effective_timeout=effective_timeout,
-                    effective_extra_body=effective_extra_body,
+                    effective_extra_body=primary_extra_body,
                     reasoning_config=reasoning_config,
                     extra_headers=extra_headers,
                 )
@@ -10343,7 +10360,7 @@ def _call_llm_impl(
                         max_tokens=max_tokens,
                         tools=tools,
                         effective_timeout=effective_timeout,
-                        effective_extra_body=effective_extra_body,
+                        effective_extra_body=primary_extra_body,
                         reasoning_config=reasoning_config,
                         extra_headers=extra_headers,
                     )
@@ -10597,6 +10614,7 @@ async def async_call_llm(
     tools: list = None,
     timeout: float = None,
     extra_body: dict = None,
+    route_extra_body: dict = None,
     reasoning_config: Optional[dict] = None,
     route_info: Optional[Dict[str, str]] = None,
 ) -> Any:
@@ -10618,6 +10636,7 @@ async def async_call_llm(
             tools=tools,
             timeout=timeout,
             extra_body=extra_body,
+            route_extra_body=route_extra_body,
             reasoning_config=reasoning_config,
             route_info=route_info,
         )
@@ -10640,6 +10659,7 @@ async def _async_call_llm_impl(
     tools: list = None,
     timeout: float = None,
     extra_body: dict = None,
+    route_extra_body: dict = None,
     reasoning_config: Optional[dict] = None,
     route_info: Optional[Dict[str, str]] = None,
 ) -> Any:
@@ -10654,6 +10674,8 @@ async def _async_call_llm_impl(
         task, provider, model, base_url, api_key)
     effective_extra_body = _get_task_extra_body(task)
     effective_extra_body.update(extra_body or {})
+    primary_extra_body = dict(effective_extra_body)
+    primary_extra_body.update(route_extra_body or {})
     effective_provider = resolved_provider
 
     if task == "vision":
@@ -10749,7 +10771,7 @@ async def _async_call_llm_impl(
     kwargs = _build_call_kwargs(
         request_provider, final_model, messages,
         temperature=temperature, max_tokens=max_tokens,
-        tools=tools, timeout=effective_timeout, extra_body=effective_extra_body,
+        tools=tools, timeout=effective_timeout, extra_body=primary_extra_body,
         reasoning_config=reasoning_config,
         base_url=_client_base or resolved_base_url, task=task)
 
@@ -11036,7 +11058,7 @@ async def _async_call_llm_impl(
                     max_tokens=max_tokens,
                     tools=tools,
                     effective_timeout=effective_timeout,
-                    effective_extra_body=effective_extra_body,
+                    effective_extra_body=primary_extra_body,
                     reasoning_config=reasoning_config,
                 )
 
@@ -11079,7 +11101,7 @@ async def _async_call_llm_impl(
                         max_tokens=max_tokens,
                         tools=tools,
                         effective_timeout=effective_timeout,
-                        effective_extra_body=effective_extra_body,
+                        effective_extra_body=primary_extra_body,
                         reasoning_config=reasoning_config,
                     )
                 except Exception as retry2_err:
