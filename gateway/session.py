@@ -1039,7 +1039,7 @@ def build_channel_continuity_note(
         where = "topic" if source.thread_id else "group"
     else:
         where = "thread" if source.thread_id else "channel"
-    return (
+    note = (
         f"[System note: This {where} had an earlier Hermes session "
         f"(session_id: {prev}) that was auto-reset. If the user refers to "
         f"earlier work here, or the request depends on this {where}'s history, "
@@ -1047,6 +1047,35 @@ def build_channel_continuity_note(
         f"acting — do not assume an unrelated recent session is the right "
         f"context.]"
     )
+    # A profile-local, Sol-authored state-of-play can carry latent framing that
+    # query-shaped retrieval would not know to ask for. Exact session history
+    # remains authoritative and searchable; this bounded memo is an explicit
+    # working-memory aid, never a replacement for the archive.
+    try:
+        from hermes_constants import get_hermes_home
+
+        memo_path = (
+            get_hermes_home()
+            / "continuity"
+            / "by-session"
+            / f"{prev}.md"
+        )
+        if memo_path.is_file():
+            memo = memo_path.read_text(encoding="utf-8", errors="replace").strip()
+            if memo:
+                max_chars = 16_000
+                if len(memo) > max_chars:
+                    memo = memo[:max_chars].rstrip() + "\n\n[State-of-play truncated.]"
+                note += (
+                    "\n\n[Prior-session state of play — bot-authored working "
+                    "memory, not a substitute for exact session_search results:]\n"
+                    + memo
+                    + "\n[End prior-session state of play.]"
+                )
+    except Exception:
+        # Continuity must fail open to the exact prior-session pointer.
+        pass
+    return note
 
 
 def is_shared_multi_user_session(

@@ -115,6 +115,21 @@ class TestBuildChannelContinuityNote:
         assert entry.prev_session_id in note
         assert "topic" in note
 
+    def test_injects_bounded_prior_state_of_play(self, _isolated_db):
+        entry = _reset_entry(Platform.TELEGRAM)
+        memo_dir = _isolated_db / "continuity" / "by-session"
+        memo_dir.mkdir(parents=True)
+        (memo_dir / f"{entry.prev_session_id}.md").write_text(
+            "The live crux is preserving latent commitments.",
+            encoding="utf-8",
+        )
+
+        note = build_channel_continuity_note(entry, _telegram_source())
+
+        assert "Prior-session state of play" in note
+        assert "preserving latent commitments" in note
+        assert "session_search" in note
+
 
     def test_no_activity_returns_none(self):
         entry = _reset_entry(Platform.SLACK, had_activity=False)
