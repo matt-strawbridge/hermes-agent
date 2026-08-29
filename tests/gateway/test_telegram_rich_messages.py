@@ -468,6 +468,17 @@ async def test_notification_silent_by_default():
 
 
 @pytest.mark.asyncio
+async def test_protect_content_applies_to_notifying_bot_output():
+    adapter = _make_adapter(extra={"protect_content": True})
+
+    await adapter.send("-100123", RICH_CONTENT, metadata={"notify": True})
+
+    api_kwargs = _rich_api_kwargs(adapter)
+    assert api_kwargs["protect_content"] is True
+    assert "disable_notification" not in api_kwargs
+
+
+@pytest.mark.asyncio
 async def test_table_only_uses_legacy_with_default_config():
     """Default config (rich_messages unset → False) keeps tables on legacy path."""
     config = PlatformConfig(enabled=True, token="fake-token")

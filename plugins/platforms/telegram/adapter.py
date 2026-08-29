@@ -759,6 +759,12 @@ class TelegramAdapter(BasePlatformAdapter):
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
         self._disable_link_previews: bool = self._coerce_bool_extra("disable_link_previews", False)
+        # Bot API content protection prevents casual forwarding/saving of bot
+        # outputs. It does not protect incoming human messages or defeat
+        # screenshots, so keep it an explicit per-profile policy.
+        self._protect_content_enabled: bool = self._coerce_bool_extra(
+            "protect_content", False
+        )
         # Bot API 10.1 Rich Messages: render constructs the legacy MarkdownV2
         # path degrades (tables → bullet lists, task lists, <details>, block
         # math) via sendRichMessage / editMessageText's rich_message param using
@@ -1251,17 +1257,21 @@ class TelegramAdapter(BasePlatformAdapter):
     def _notification_kwargs(
         self, metadata: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Return disable_notification kwargs when the adapter is in silent mode.
+        """Return notification and content-protection kwargs for sends.
 
         In "important" mode, all message sends are silently delivered
         (disable_notification=True) unless the caller explicitly requests a
         notification by setting ``metadata["notify"] = True``.
         """
-        if getattr(self, "_notifications_mode", "important") != "important":
-            return {}
-        if (metadata or {}).get("notify"):
-            return {}
-        return {"disable_notification": True}
+        kwargs: Dict[str, Any] = {}
+        if getattr(self, "_protect_content_enabled", False):
+            kwargs["protect_content"] = True
+        if (
+            getattr(self, "_notifications_mode", "important") == "important"
+            and not (metadata or {}).get("notify")
+        ):
+            kwargs["disable_notification"] = True
+        return kwargs
 
     def _is_callback_user_authorized(
         self,
