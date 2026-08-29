@@ -50,10 +50,32 @@ class TestTelegramDmToolsets:
         )
         assert adapter.toolsets_for_source(_Source(user_id="100")) is None
 
-    def test_group_and_forum_routes_are_unchanged(self):
+    def test_group_and_forum_routes_are_unchanged_without_policy(self):
         adapter = _adapter({"dm_toolsets": ["web"]})
         assert adapter.toolsets_for_source(_Source(chat_type="group")) is None
         assert adapter.toolsets_for_source(_Source(chat_type="forum")) is None
+
+    def test_shared_routes_get_exact_policy_without_privileged_bypass(self):
+        adapter = _adapter(
+            {
+                "group_toolsets": ["web", "vision", "company_context"],
+                "dm_privileged_users": ["100"],
+            }
+        )
+        expected = ["web", "vision", "company_context"]
+        assert adapter.toolsets_for_source(
+            _Source(chat_type="group", user_id="100")
+        ) == expected
+        assert adapter.toolsets_for_source(
+            _Source(chat_type="forum", user_id="100")
+        ) == expected
+        assert adapter.toolsets_for_source(
+            _Source(chat_type="channel", user_id="100")
+        ) == expected
+
+    def test_malformed_group_policy_fails_closed(self):
+        adapter = _adapter({"group_toolsets": "web,file"})
+        assert adapter.toolsets_for_source(_Source(chat_type="group")) == []
 
     def test_absent_dm_policy_preserves_legacy_behavior(self):
         assert _adapter({}).toolsets_for_source(_Source()) is None

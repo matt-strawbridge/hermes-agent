@@ -1316,13 +1316,15 @@ class TelegramAdapter(BasePlatformAdapter):
         return "*" in allowed_ids or normalized_user_id in allowed_ids
 
     def toolsets_for_source(self, source) -> Optional[List[str]]:
-        """Return a least-privilege toolset override for private DMs.
+        """Return a least-privilege toolset override for Telegram routes.
 
-        Telegram group/forum routes continue to use the profile's normal
-        ``platform_toolsets.telegram`` surface.  Operators may narrow private
-        chats independently with ``telegram.extra.dm_toolsets`` and exempt a
-        small set of trusted operator IDs with
-        ``telegram.extra.dm_privileged_users``.
+        Operators may narrow private chats with
+        ``telegram.extra.dm_toolsets`` and exempt a small set of trusted
+        operator IDs with ``telegram.extra.dm_privileged_users``. Shared
+        group/forum/channel routes may be narrowed independently with
+        ``telegram.extra.group_toolsets``; there is deliberately no per-user
+        bypass in shared rooms because other people and forwarded content
+        co-author that context.
 
         The DM authorization allowlist remains a separate pre-turn gate.  This
         hook answers a different question: what may an already-authorized DM
@@ -1330,40 +1332,45 @@ class TelegramAdapter(BasePlatformAdapter):
         fails closed to zero tools instead of inheriting the broader Telegram
         surface.
         """
-        if str(getattr(source, "chat_type", "") or "").strip().lower() not in {
-            "dm",
-            "private",
-        }:
+        extra = getattr(self.config, "extra", None)
+        if not isinstance(extra, dict):
             return None
 
-        extra = getattr(self.config, "extra", None)
-        if not isinstance(extra, dict) or "dm_toolsets" not in extra:
+        chat_type = str(
+            getattr(source, "chat_type", "") or ""
+        ).strip().lower()
+        is_dm = chat_type in {"dm", "private"}
+        is_shared = chat_type in {"group", "forum", "channel", "supergroup"}
+        policy_key = "dm_toolsets" if is_dm else "group_toolsets"
+        if (not is_dm and not is_shared) or policy_key not in extra:
             return None
 
         user_id = str(getattr(source, "user_id", "") or "").strip()
-        privileged_raw = extra.get("dm_privileged_users", [])
-        if isinstance(privileged_raw, str):
-            privileged = {
-                item.strip()
-                for item in privileged_raw.split(",")
-                if item.strip()
-            }
-        elif isinstance(privileged_raw, (list, tuple, set)):
-            privileged = {
-                str(item).strip()
-                for item in privileged_raw
-                if str(item).strip()
-            }
-        else:
-            privileged = set()
-        if user_id and (user_id in privileged or "*" in privileged):
-            return None
+        if is_dm:
+            privileged_raw = extra.get("dm_privileged_users", [])
+            if isinstance(privileged_raw, str):
+                privileged = {
+                    item.strip()
+                    for item in privileged_raw.split(",")
+                    if item.strip()
+                }
+            elif isinstance(privileged_raw, (list, tuple, set)):
+                privileged = {
+                    str(item).strip()
+                    for item in privileged_raw
+                    if str(item).strip()
+                }
+            else:
+                privileged = set()
+            if user_id and (user_id in privileged or "*" in privileged):
+                return None
 
-        configured = extra.get("dm_toolsets")
+        configured = extra.get(policy_key)
         if not isinstance(configured, list):
             logger.warning(
-                "[Telegram] dm_toolsets must be a list; authorized DM user %s "
-                "will receive no model tools",
+                "[Telegram] %s must be a list; authorized user %s will receive "
+                "no model tools",
+                policy_key,
                 user_id or "<unknown>",
             )
             return []
