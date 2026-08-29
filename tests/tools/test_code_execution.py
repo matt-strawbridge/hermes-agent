@@ -59,6 +59,8 @@ from tools.code_execution_tool import (
     _TOOL_DOC_LINES,
     _execute_remote,
     _format_interrupted_output,
+    _get_max_stdout_bytes,
+    _truncate_stdout_text,
 )
 from tools.registry import registry
 
@@ -92,6 +94,34 @@ class TestSandboxRequirements(unittest.TestCase):
         self.assertEqual(EXECUTE_CODE_SCHEMA["name"], "execute_code")
         self.assertIn("code", EXECUTE_CODE_SCHEMA["parameters"]["properties"])
         self.assertIn("code", EXECUTE_CODE_SCHEMA["parameters"]["required"])
+
+
+class TestConfiguredStdoutBudget(unittest.TestCase):
+    def test_default_and_configured_limits(self):
+        with patch("tools.code_execution_tool._load_config", return_value={}):
+            self.assertEqual(_get_max_stdout_bytes(), 50_000)
+        with patch(
+            "tools.code_execution_tool._load_config",
+            return_value={"max_stdout_bytes": 20_000},
+        ):
+            self.assertEqual(_get_max_stdout_bytes(), 20_000)
+
+    def test_configured_limit_keeps_head_tail_and_spill_pointer(self):
+        with patch(
+            "tools.code_execution_tool._load_config",
+            return_value={"max_stdout_bytes": 2_000},
+        ), patch(
+            "tools.code_execution_tool._spill_full_stdout",
+            return_value="/tmp/full-output.txt",
+        ):
+            text, metadata = _truncate_stdout_text("A" * 5_000)
+
+        self.assertTrue(metadata["stdout_truncated"])
+        self.assertEqual(metadata["stdout_bytes_captured"], 2_000)
+        self.assertEqual(metadata["stdout_bytes_total"], 5_000)
+        self.assertEqual(metadata["stdout_spill_path"], "/tmp/full-output.txt")
+        self.assertIn("FULL output saved", metadata["warning"])
+        self.assertLess(len(text), 2_200)
 
 
 class TestInterruptedOutput(unittest.TestCase):

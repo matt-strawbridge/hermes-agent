@@ -2343,6 +2343,11 @@ class ContextCompressor(ContextEngine):
             attempt_id = attempt_id or seed.get("attempt_id")
             session_id = session_id or seed.get("session_id")
             trigger_source = trigger_source or seed.get("trigger_source")
+        last_real = _safe_int(self.last_real_prompt_tokens)
+        current_estimated = _safe_int(current_tokens)
+        rough_real_ratio = None
+        if last_real and last_real > 0 and current_estimated is not None:
+            rough_real_ratio = round(current_estimated / last_real, 4)
         telemetry: Dict[str, Any] = {
             "event": "compression_attempt",
             "attempt_id": attempt_id or uuid.uuid4().hex,
@@ -2351,7 +2356,9 @@ class ContextCompressor(ContextEngine):
             "main_provider": self.provider or "",
             "main_model": self.model or "",
             "main_context_limit": _safe_int(self.context_length),
-            "current_estimated_tokens": _safe_int(current_tokens),
+            "current_estimated_tokens": current_estimated,
+            "last_real_prompt_tokens": last_real if last_real and last_real > 0 else None,
+            "rough_to_last_real_ratio": rough_real_ratio,
             "effective_threshold": _safe_int(self.threshold_tokens),
             "protected_head_tokens": None,
             "protected_tail_tokens": None,
@@ -4286,6 +4293,10 @@ class ContextCompressor(ContextEngine):
         object is returned unchanged — the standard no-op caller contract
         (callers gate bookkeeping on ``result is not input``).
 
+        The same atomic rewrite also strips stale per-turn Codex reasoning
+        replay sidecars, which otherwise inflate rough preflight estimates and
+        compressor input until a full compaction succeeds.
+
         Returns ``(messages, 0)`` — the input object — when disabled, below
         the trigger, or when the reclaim gate rejects the commit.
         """
@@ -4311,12 +4322,18 @@ class ContextCompressor(ContextEngine):
             and not callable(getattr(session_db, "archive_and_compact", None))
         ):
             return messages, 0
-        pruned_msgs, pruned_count = self._prune_old_tool_results(
+        pruned_msgs, tool_pruned_count = self._prune_old_tool_results(
             messages,
             protect_tail_count=self.protect_last_n,
             protect_tail_tokens=None,
             min_prune_chars=self.proactive_prune_min_result_chars,
         )
+        # Responses-mode reasoning replay belongs only to the active turn.
+        # Strip stale sidecars in the same episodic, atomic rewrite as tool
+        # pruning instead of waiting for a full LLM compaction to commit.
+        # This is deterministic and preserves native compaction checkpoints.
+        replay_pruned_count = _prune_stale_reasoning_replay(pruned_msgs)
+        pruned_count = tool_pruned_count + replay_pruned_count
         if not pruned_count:
             # Standard no-op contract: hand back the INPUT object so callers
             # can gate bookkeeping on `result is not input`.

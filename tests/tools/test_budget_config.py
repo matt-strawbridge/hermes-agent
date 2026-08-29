@@ -174,6 +174,40 @@ class TestBudgetForContextWindow:
         assert threshold < huge_len
         assert cfg.default_result_size < huge_len
 
+    def test_generic_budget_overrides_from_profile_config(self, tmp_path, monkeypatch):
+        (tmp_path / "config.yaml").write_text(
+            "tool_budget:\n"
+            "  result_size_chars: 16000\n"
+            "  turn_budget_chars: 90000\n"
+            "  preview_size_chars: 2400\n"
+            "  tool_overrides:\n"
+            "    search_files: 12000\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        cfg = budget_for_context_window(272_000)
+
+        assert cfg.default_result_size == 16_000
+        assert cfg.turn_budget == 90_000
+        assert cfg.preview_size == 2_400
+        assert cfg.resolve_threshold("unknown_tool") == 16_000
+        assert cfg.resolve_threshold("search_files") == 12_000
+
+    def test_invalid_generic_overrides_fall_back_safely(self, tmp_path, monkeypatch):
+        (tmp_path / "config.yaml").write_text(
+            "tool_budget:\n"
+            "  result_size_chars: nope\n"
+            "  turn_budget_chars: -1\n"
+            "  preview_size_chars: 0\n"
+            "  tool_overrides:\n"
+            "    bad: nope\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        cfg = budget_for_context_window(None)
+
+        assert cfg is DEFAULT_BUDGET
+
 
 # ---------------------------------------------------------------------------
 # MCP-prefix threshold (mcp_result_size)

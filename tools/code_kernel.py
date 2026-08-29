@@ -474,7 +474,9 @@ def _append_bounded(chunks: List[bytes], total: List[int], data: bytes, cap: int
 
 def _stdout_reader(kernel: SessionKernel) -> None:
     """Split the child's stdout into protocol frames and raw passthrough."""
-    from tools.code_execution_tool import MAX_STDOUT_BYTES
+    from tools.code_execution_tool import _get_max_stdout_bytes
+
+    max_stdout_bytes = _get_max_stdout_bytes()
 
     assert kernel.proc is not None and kernel.proc.stdout is not None
     stream = kernel.proc.stdout
@@ -487,7 +489,7 @@ def _stdout_reader(kernel: SessionKernel) -> None:
         chunk = stream.read1(4096)
         if not chunk:
             if buf:
-                _append_bounded(kernel.raw_chunks, kernel.raw_bytes, buf, MAX_STDOUT_BYTES)
+                _append_bounded(kernel.raw_chunks, kernel.raw_bytes, buf, max_stdout_bytes)
             kernel.response_q.put({"status": "kernel-eof"})
             return
         buf += chunk
@@ -498,11 +500,11 @@ def _stdout_reader(kernel: SessionKernel) -> None:
                 # across reads; everything before it is raw output.
                 spill = buf[: -len(marker)] if len(buf) > len(marker) else b""
                 if spill:
-                    _append_bounded(kernel.raw_chunks, kernel.raw_bytes, spill, MAX_STDOUT_BYTES)
+                    _append_bounded(kernel.raw_chunks, kernel.raw_bytes, spill, max_stdout_bytes)
                     buf = buf[len(spill):]
                 break
             if index:
-                _append_bounded(kernel.raw_chunks, kernel.raw_bytes, buf[:index], MAX_STDOUT_BYTES)
+                _append_bounded(kernel.raw_chunks, kernel.raw_bytes, buf[:index], max_stdout_bytes)
             rest = buf[index + len(marker):]
             newline = rest.find(b"\n")
             if newline < 0:
@@ -513,7 +515,7 @@ def _stdout_reader(kernel: SessionKernel) -> None:
             except ValueError:
                 # Not a real frame header (user output that happens to
                 # contain the marker bytes); treat the marker as raw.
-                _append_bounded(kernel.raw_chunks, kernel.raw_bytes, marker, MAX_STDOUT_BYTES)
+                _append_bounded(kernel.raw_chunks, kernel.raw_bytes, marker, max_stdout_bytes)
                 buf = rest
                 continue
             body = rest[newline + 1:]

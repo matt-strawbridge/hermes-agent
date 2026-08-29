@@ -94,6 +94,8 @@ def test_compression_attempt_telemetry_is_metadata_only(caplog):
     assert payload["main_model"] == "test/main-model"
     assert payload["main_context_limit"] == 100_000
     assert payload["current_estimated_tokens"] == 75_000
+    assert payload["last_real_prompt_tokens"] is None
+    assert payload["rough_to_last_real_ratio"] is None
     assert payload["effective_threshold"] == compressor.threshold_tokens
     assert payload["protected_head_tokens"] is not None
     assert payload["protected_tail_tokens"] is not None
@@ -198,3 +200,20 @@ def test_aux_call_telemetry_records_content_free_phase_timings():
         "commit_ms": 11,
     }
     assert "TOPSECRET_TRANSCRIPT_TEXT" not in json.dumps(payload)
+
+
+def test_attempt_telemetry_records_rough_to_real_anchor_ratio():
+    with patch("agent.context_compressor.get_model_context_length", return_value=100_000):
+        compressor = ContextCompressor(
+            model="test/main-model",
+            provider="test-provider",
+            threshold_percent=0.50,
+            quiet_mode=True,
+            config_context_length=100_000,
+        )
+    compressor.last_real_prompt_tokens = 50_000
+
+    payload = compressor._begin_compression_telemetry(current_tokens=75_000)
+
+    assert payload["last_real_prompt_tokens"] == 50_000
+    assert payload["rough_to_last_real_ratio"] == 1.5

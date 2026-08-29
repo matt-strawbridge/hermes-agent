@@ -36,7 +36,27 @@ DEFAULT_MCP_RESULT_SIZE_CHARS: int = 50_000
 MCP_TOOL_PREFIX: str = "mcp_"
 
 
-def _configured_mcp_result_size() -> int:
+def _configured_tool_budget() -> dict:
+    """Read the active tool_budget mapping through the sanctioned config path."""
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        data = load_config_readonly()
+        block = data.get("tool_budget") if isinstance(data, dict) else None
+        return block if isinstance(block, dict) else {}
+    except Exception:
+        return {}
+
+
+def _positive_int(block: dict, key: str, default: int) -> int:
+    try:
+        value = int(block.get(key, default))
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _configured_mcp_result_size(block: dict | None = None) -> int:
     """Read ``tool_budget.mcp_result_size_chars`` from the active config.
 
     Goes through :func:`hermes_cli.config.load_config_readonly` (the
@@ -47,20 +67,10 @@ def _configured_mcp_result_size() -> int:
     wider configurable-caps proposal (#80508) so the two can merge
     without a key rename.
     """
-    try:
-        from hermes_cli.config import load_config_readonly
-
-        data = load_config_readonly()
-        block = data.get("tool_budget") if isinstance(data, dict) else None
-        if isinstance(block, dict):
-            raw = block.get("mcp_result_size_chars")
-            if raw is not None:
-                value = int(raw)
-                if value > 0:
-                    return value
-    except Exception:
-        pass
-    return DEFAULT_MCP_RESULT_SIZE_CHARS
+    block = _configured_tool_budget() if block is None else block
+    return _positive_int(
+        block, "mcp_result_size_chars", DEFAULT_MCP_RESULT_SIZE_CHARS
+    )
 
 
 @dataclass(frozen=True)
@@ -150,12 +160,44 @@ def budget_for_context_window(context_length: int | None) -> BudgetConfig:
     small models proportionally to their window, floored so a usable preview
     always survives.
     """
-    mcp_result_size = _configured_mcp_result_size()
+    block = _configured_tool_budget()
+    configured_result_size = _positive_int(
+        block, "result_size_chars", DEFAULT_RESULT_SIZE_CHARS
+    )
+    configured_turn_budget = _positive_int(
+        block, "turn_budget_chars", DEFAULT_TURN_BUDGET_CHARS
+    )
+    configured_preview_size = _positive_int(
+        block, "preview_size_chars", DEFAULT_PREVIEW_SIZE_CHARS
+    )
+    mcp_result_size = _configured_mcp_result_size(block)
+    raw_overrides = block.get("tool_overrides", {})
+    tool_overrides: Dict[str, int] = {}
+    if isinstance(raw_overrides, dict):
+        for name, raw in raw_overrides.items():
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                tool_overrides[str(name)] = value
 
     if not context_length or context_length <= 0:
-        if mcp_result_size == DEFAULT_MCP_RESULT_SIZE_CHARS:
+        if (
+            configured_result_size == DEFAULT_RESULT_SIZE_CHARS
+            and configured_turn_budget == DEFAULT_TURN_BUDGET_CHARS
+            and configured_preview_size == DEFAULT_PREVIEW_SIZE_CHARS
+            and mcp_result_size == DEFAULT_MCP_RESULT_SIZE_CHARS
+            and not tool_overrides
+        ):
             return DEFAULT_BUDGET
-        return BudgetConfig(mcp_result_size=mcp_result_size)
+        return BudgetConfig(
+            default_result_size=configured_result_size,
+            turn_budget=configured_turn_budget,
+            preview_size=configured_preview_size,
+            mcp_result_size=mcp_result_size,
+            tool_overrides=tool_overrides,
+        )
 
     window_chars = context_length * _CHARS_PER_TOKEN
     per_result = int(window_chars * _PER_RESULT_WINDOW_FRACTION)
@@ -163,12 +205,19 @@ def budget_for_context_window(context_length: int | None) -> BudgetConfig:
 
     # Clamp: never exceed the historical defaults (so large models are
     # unchanged), never drop below the floor (so tiny models stay usable).
-    per_result = max(_MIN_RESULT_SIZE_CHARS, min(per_result, DEFAULT_RESULT_SIZE_CHARS))
-    per_turn = max(_MIN_TURN_BUDGET_CHARS, min(per_turn, DEFAULT_TURN_BUDGET_CHARS))
+    per_result = max(
+        _MIN_RESULT_SIZE_CHARS,
+        min(per_result, DEFAULT_RESULT_SIZE_CHARS, configured_result_size),
+    )
+    per_turn = max(
+        _MIN_TURN_BUDGET_CHARS,
+        min(per_turn, DEFAULT_TURN_BUDGET_CHARS, configured_turn_budget),
+    )
 
     return BudgetConfig(
         default_result_size=per_result,
         turn_budget=per_turn,
-        preview_size=DEFAULT_PREVIEW_SIZE_CHARS,
+        preview_size=configured_preview_size,
         mcp_result_size=mcp_result_size,
+        tool_overrides=tool_overrides,
     )

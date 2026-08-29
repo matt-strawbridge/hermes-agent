@@ -87,6 +87,37 @@ def test_prunes_below_compression_threshold():
         assert m["content"] != _PRUNED_TOOL_PLACEHOLDER       # informative, not a blank placeholder
 
 
+def test_proactive_boundary_also_strips_stale_reasoning_replay():
+    c = _compressor(
+        protect_first_n=0,
+        protect_last_n=1,
+        proactive_prune_tokens=48_000,
+        proactive_prune_min_result_chars=8_000,
+        proactive_prune_min_reclaim_tokens=0,
+    )
+    stale = [{"type": "reasoning", "encrypted_content": "x" * 12_000}]
+    active = [{"type": "reasoning", "encrypted_content": "active"}]
+    msgs = [
+        {"role": "user", "content": "old turn"},
+        {"role": "assistant", "content": "old answer", "codex_reasoning_items": stale},
+        _assistant_call("c1"),
+        _tool_msg("c1", "small"),
+        {"role": "user", "content": "active turn"},
+        _assistant_call("c2"),
+        _tool_msg("c2", "small"),
+        {"role": "assistant", "content": "active answer", "codex_reasoning_items": active},
+    ]
+
+    result, pruned = c.prune_tool_results_only(msgs, current_tokens=120_000)
+
+    assert pruned == 1
+    assert result is not msgs
+    assert "codex_reasoning_items" not in result[1]
+    assert result[-1]["codex_reasoning_items"] == active
+    # The no-op path must not mutate the input list before an atomic commit.
+    assert msgs[1]["codex_reasoning_items"] == stale
+
+
 
 
 

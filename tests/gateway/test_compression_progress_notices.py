@@ -114,3 +114,38 @@ def test_progress_regex_covers_every_routine_sample():
         assert gateway_run._COMPRESSION_PROGRESS_STATUS_RE.search(message), (
             f"routine compression sample not covered by the opt-in gate: {message!r}"
         )
+
+
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS)
+def test_automatic_compression_failure_is_log_only_by_default(
+    progress_notices_default, platform
+):
+    message = (
+        "⚠ Context compression timed out after 180.0s before the streaming "
+        "summary could be committed. No messages were dropped."
+    )
+    assert _prepare_gateway_status_message(platform, "warn", message) is None
+
+
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS)
+def test_critical_context_warning_bypasses_failure_gate(
+    progress_notices_default, platform
+):
+    message = (
+        "[[HERMES_CONTEXT_CRITICAL]] ⚠ Context is over the compression "
+        "threshold and compression is currently blocked."
+    )
+    assert _prepare_gateway_status_message(platform, "warn", message) == (
+        "⚠ Context is over the compression threshold and compression is "
+        "currently blocked."
+    )
+
+
+def test_failure_notice_can_be_opted_in(monkeypatch):
+    monkeypatch.setattr(
+        gateway_run,
+        "_load_gateway_config",
+        lambda: {"compression": {"failure_notices": True}},
+    )
+    message = "⚠ Context compression timed out after 180.0s."
+    assert _prepare_gateway_status_message("telegram", "warn", message) == message

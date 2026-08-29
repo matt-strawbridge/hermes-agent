@@ -73,7 +73,11 @@ SANDBOX_ALLOWED_TOOLS = frozenset([
 # Resource limit defaults (overridable via config.yaml → code_execution.*)
 DEFAULT_TIMEOUT = 300        # 5 minutes
 DEFAULT_MAX_TOOL_CALLS = 50
-MAX_STDOUT_BYTES = 50_000    # 50 KB
+DEFAULT_MAX_STDOUT_BYTES = 50_000    # 50 KB
+# Compatibility export for callers/tests that import the historical constant.
+# Runtime capture paths use _get_max_stdout_bytes() so profile config can
+# lower the inline payload without sacrificing the full spill artifact.
+MAX_STDOUT_BYTES = DEFAULT_MAX_STDOUT_BYTES
 MAX_STDERR_BYTES = 10_000    # 10 KB
 
 
@@ -129,11 +133,12 @@ def _truncate_stdout_text(stdout_text: str) -> Tuple[str, Dict[str, Any]]:
     cache/web full-text store.
     """
     stdout_bytes = stdout_text.encode("utf-8", errors="replace")
-    if len(stdout_bytes) <= MAX_STDOUT_BYTES:
+    max_stdout_bytes = _get_max_stdout_bytes()
+    if len(stdout_bytes) <= max_stdout_bytes:
         return _assemble_stdout_result(stdout_bytes)
 
-    head_bytes = int(MAX_STDOUT_BYTES * 0.4)
-    tail_bytes = MAX_STDOUT_BYTES - head_bytes
+    head_bytes = int(max_stdout_bytes * 0.4)
+    tail_bytes = max_stdout_bytes - head_bytes
     text, metadata = _assemble_stdout_result(
         stdout_bytes[:head_bytes],
         stdout_bytes[-tail_bytes:],
@@ -1779,8 +1784,9 @@ def execute_code(
         # For stdout we use a head+tail strategy: keep the first HEAD_BYTES
         # and a rolling window of the last TAIL_BYTES so the final print()
         # output is never lost.  Stderr keeps head-only (errors appear early).
-        _STDOUT_HEAD_BYTES = int(MAX_STDOUT_BYTES * 0.4)   # 40% head
-        _STDOUT_TAIL_BYTES = MAX_STDOUT_BYTES - _STDOUT_HEAD_BYTES  # 60% tail
+        _max_stdout_bytes = _get_max_stdout_bytes()
+        _STDOUT_HEAD_BYTES = int(_max_stdout_bytes * 0.4)   # 40% head
+        _STDOUT_TAIL_BYTES = _max_stdout_bytes - _STDOUT_HEAD_BYTES  # 60% tail
 
         def _drain(pipe, chunks, max_bytes):
             """Simple head-only drain (used for stderr)."""
@@ -2047,6 +2053,23 @@ def _load_config() -> dict:
         return cfg if isinstance(cfg, dict) else {}
     except Exception:
         return {}
+
+
+def _get_max_stdout_bytes() -> int:
+    """Return the configured inline stdout budget for execute_code.
+
+    Full output is still persisted by _spill_full_stdout whenever the inline
+    view is truncated, so lowering this value removes machine exhaust from
+    model context without deleting the underlying result.
+    """
+    raw = _load_config().get("max_stdout_bytes", DEFAULT_MAX_STDOUT_BYTES)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = DEFAULT_MAX_STDOUT_BYTES
+    # Keep enough room for a useful head/tail preview and prevent a mistaken
+    # config value from turning the inline channel into an unbounded sink.
+    return max(1_024, min(value, 5_000_000))
 
 
 # ---------------------------------------------------------------------------

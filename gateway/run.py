@@ -153,6 +153,20 @@ _TELEGRAM_NOISY_STATUS_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+_CONTEXT_CRITICAL_MARKER = "[[HERMES_CONTEXT_CRITICAL]]"
+_COMPRESSION_FAILURE_STATUS_RE = re.compile(
+    r"("
+    r"context\s+compression\s+timed\s+out"
+    r"|context\s+compression\s+commit\s+is\s+taking"
+    r"|context\s+is\s+over\s+the\s+compression\s+threshold"
+    r"|compression\s+summary\s+failed"
+    r"|configured\s+auxiliary\s+compression\s+provider\s+.+\s+unavailable"
+    r"|skipping\s+concurrent\s+compression"
+    r"|context\s+compression\s+(?:failed|aborted|could\s+not)"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 _HYGIENE_COOLDOWN_LADDER_MULTIPLIERS = (1, 3, 9)
 # Absolute ceiling on an escalated hygiene cooldown, mirroring
@@ -368,6 +382,28 @@ def _gateway_compression_progress_notices_enabled() -> bool:
         compression_cfg = config.get("compression") if isinstance(config, dict) else None
         if isinstance(compression_cfg, dict):
             return str(compression_cfg.get("progress_notices", False)).strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "on",
+            }
+    except Exception:
+        pass
+    return False
+
+
+def _gateway_compression_failure_notices_enabled() -> bool:
+    """Return whether routine automatic compression failures reach chat.
+
+    Default false keeps operational diagnostics in logs. A warning marked
+    context-critical bypasses this gate so a user still receives one honest
+    signal when provider-reported usage is near the hard model window.
+    """
+    try:
+        config = _load_gateway_config()
+        compression_cfg = config.get("compression") if isinstance(config, dict) else None
+        if isinstance(compression_cfg, dict):
+            return str(compression_cfg.get("failure_notices", False)).strip().lower() in {
                 "true",
                 "1",
                 "yes",
@@ -857,6 +893,13 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
         return text
 
     text = _redact_gateway_user_facing_secrets(text)
+    is_context_critical = _CONTEXT_CRITICAL_MARKER in text
+    if is_context_critical:
+        text = text.replace(_CONTEXT_CRITICAL_MARKER, "", 1).lstrip()
+    if _COMPRESSION_FAILURE_STATUS_RE.search(text):
+        if is_context_critical or _gateway_compression_failure_notices_enabled():
+            return text
+        return None
     if _TELEGRAM_NOISY_STATUS_RE.search(text):
         # Opt-in #52995: `compression.progress_notices: true` lets ROUTINE
         # compression progress statuses through to chat platforms. The

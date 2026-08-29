@@ -1059,13 +1059,23 @@ class AIAgent:
                     f"compression blocked ({reason})",
                     provenance=ActivityProvenance.AGENT_COMPRESSION_COOLDOWN,
                 )
-            self._emit_warning(
-                CONTEXT_OVERFLOW_BLOCKED_WARNING_TEMPLATE.format(
-                    tokens=preflight_tokens,
-                    threshold=threshold_tokens,
-                    reason=reason,
-                )
+            warning = CONTEXT_OVERFLOW_BLOCKED_WARNING_TEMPLATE.format(
+                tokens=preflight_tokens,
+                threshold=threshold_tokens,
+                reason=reason,
             )
+            compressor = getattr(self, "context_compressor", None)
+            real_tokens = int(
+                getattr(compressor, "last_real_prompt_tokens", 0) or 0
+            )
+            context_length = int(getattr(compressor, "context_length", 0) or 0)
+            if (
+                real_tokens > 0
+                and context_length > 0
+                and real_tokens >= int(context_length * 0.85)
+            ):
+                warning = "[[HERMES_CONTEXT_CRITICAL]] " + warning
+            self._emit_warning(warning)
 
     def _warn_uncompressed_context_overflow(
         self, preflight_tokens: int, context_length: int
@@ -1081,6 +1091,7 @@ class AIAgent:
         if getattr(self, "_last_ctx_overflow_warn", None) != _warn_key:
             self._last_ctx_overflow_warn = _warn_key
             self._emit_warning(
+                "[[HERMES_CONTEXT_CRITICAL]] "
                 f"⚠️ Session context (~{preflight_tokens:,} tokens) exceeds the model "
                 f"context window (~{context_length:,} tokens) with compression disabled "
                 f"(compression.enabled: false). Use /compact to compress history or "
@@ -8180,8 +8191,8 @@ class AIAgent:
                     if callable(emit):
                         emit(
                             "⚠ Context compression timed out "
-                            f"after {idle:.1f}s with no output from the summary "
-                            "model. No messages were dropped — continuing without "
+                            f"after {idle:.1f}s before the streaming summary could "
+                            "be committed. No messages were dropped — continuing without "
                             "compression. Run /compress to retry, /new for a clean "
                             "session, or check auxiliary.compression."
                         )
