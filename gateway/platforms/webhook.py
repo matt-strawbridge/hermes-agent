@@ -465,7 +465,9 @@ class WebhookAdapter(BasePlatformAdapter):
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return {"name": chat_id, "type": "webhook"}
 
-    def toolsets_for_source(self, source) -> Optional[List[str]]:
+    def toolsets_for_source(
+        self, source, *, prompt: Optional[str] = None
+    ) -> Optional[List[str]]:
         """Per-route toolset override.
 
         Webhook session chat_ids are ``webhook:{route}:{delivery_id}``.

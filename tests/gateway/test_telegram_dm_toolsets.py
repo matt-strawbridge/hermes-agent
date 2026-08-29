@@ -93,6 +93,58 @@ class TestTelegramDmToolsets:
         )
         assert adapter.toolsets_for_source(_Source(user_id="101")) is None
 
+    def test_dm_scratchpad_toolset_is_mounted_only_for_explicit_request(self):
+        adapter = _adapter(
+            {
+                "dm_toolsets": ["web", "company_context"],
+                "group_toolsets": ["web", "company_context"],
+                "dm_scratchpad_toolsets": ["dm_scratchpads"],
+            }
+        )
+        source = _Source(user_id="200")
+        assert adapter.toolsets_for_source(
+            source, prompt="what did we discuss somewhere?"
+        ) == ["web", "company_context"]
+        assert adapter.toolsets_for_source(
+            source, prompt="Please search the DM scratchpads for lanterns"
+        ) == ["web", "company_context", "dm_scratchpads"]
+        assert adapter.toolsets_for_source(
+            source, prompt="/dmsearch lanterns"
+        ) == ["web", "company_context", "dm_scratchpads"]
+
+    def test_buried_or_lane_only_text_does_not_mount_scratchpads(self):
+        adapter = _adapter(
+            {
+                "dm_toolsets": ["web"],
+                "dm_scratchpad_toolsets": ["dm_scratchpads"],
+            }
+        )
+        source = _Source()
+        buried = "Here is a long forwarded note. " + ("x" * 400) + (
+            " search the DM scratchpads"
+        )
+        assert adapter.toolsets_for_source(source, prompt=buried) == ["web"]
+        assert adapter.toolsets_for_source(
+            source, prompt="The DM scratchpad is interesting"
+        ) == ["web"]
+
+    def test_privileged_explicit_policy_mounts_reader_without_losing_operator_tools(self):
+        adapter = _adapter(
+            {
+                "dm_toolsets": ["web"],
+                "dm_privileged_users": ["100"],
+                "dm_scratchpad_toolsets": ["dm_scratchpads"],
+                "dm_privileged_explicit_toolsets": [
+                    "terminal", "file", "dm_scratchpads"
+                ],
+            }
+        )
+        source = _Source(user_id="100")
+        assert adapter.toolsets_for_source(source, prompt="ordinary work") is None
+        assert adapter.toolsets_for_source(
+            source, prompt="Search the private bot threads for the idea"
+        ) == ["terminal", "file", "dm_scratchpads"]
+
 
 class TestEmptyRouteOverride:
     def test_empty_override_does_not_fall_back_to_platform_tools(self):

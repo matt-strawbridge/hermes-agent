@@ -1315,7 +1315,43 @@ class TelegramAdapter(BasePlatformAdapter):
         allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
         return "*" in allowed_ids or normalized_user_id in allowed_ids
 
-    def toolsets_for_source(self, source) -> Optional[List[str]]:
+    @staticmethod
+    def _is_explicit_dm_scratchpad_request(prompt: Optional[str]) -> bool:
+        """Recognize a direct, imperative request for the DM scratchpad lane.
+
+        The match is deliberately anchored near the beginning of the live
+        turn so an instruction buried in a pasted/forwarded body cannot mount
+        the archive reader. ``/dmsearch`` is the unambiguous escape hatch.
+        """
+        text = str(prompt or "").strip()
+        if not text:
+            return False
+        first = " ".join(text[:600].split())
+        if re.match(r"^/dmsearch(?:\s|$)", first, re.IGNORECASE):
+            return True
+        # Strip the normal Telegram author prefix and an optional leading bot
+        # mention, then require both an explicit retrieval verb and a DM-lane
+        # noun inside the first short instruction.
+        first = re.sub(r"^\[[^\]\n]{1,160}\]\s*", "", first)
+        first = re.sub(r"^@[A-Za-z0-9_]+\s*[,,:-]?\s*", "", first)
+        head = first[:320]
+        verb = re.search(
+            r"\b(search|find|read|inspect|retrieve|pull|check|show me|"
+            r"look(?:\s+(?:up|through|in|at))?|what did)\b",
+            head,
+            re.IGNORECASE,
+        )
+        lane = re.search(
+            r"\b(dm|dms|direct messages?|dm scratchpads?|scratchpad archive|"
+            r"private bot (?:thread|chat)s?|private (?:thread|chat)s?)\b",
+            head,
+            re.IGNORECASE,
+        )
+        return bool(verb and lane)
+
+    def toolsets_for_source(
+        self, source, *, prompt: Optional[str] = None
+    ) -> Optional[List[str]]:
         """Return a least-privilege toolset override for Telegram routes.
 
         Operators may narrow private chats with
@@ -1346,6 +1382,13 @@ class TelegramAdapter(BasePlatformAdapter):
             return None
 
         user_id = str(getattr(source, "user_id", "") or "").strip()
+        explicit_scratchpad = self._is_explicit_dm_scratchpad_request(prompt)
+        scratchpad_raw = extra.get("dm_scratchpad_toolsets", [])
+        scratchpad_toolsets = (
+            [str(item).strip() for item in scratchpad_raw if str(item).strip()]
+            if isinstance(scratchpad_raw, list)
+            else []
+        )
         if is_dm:
             privileged_raw = extra.get("dm_privileged_users", [])
             if isinstance(privileged_raw, str):
@@ -1363,6 +1406,16 @@ class TelegramAdapter(BasePlatformAdapter):
             else:
                 privileged = set()
             if user_id and (user_id in privileged or "*" in privileged):
+                if explicit_scratchpad:
+                    privileged_explicit = extra.get(
+                        "dm_privileged_explicit_toolsets"
+                    )
+                    if isinstance(privileged_explicit, list):
+                        return [
+                            str(item).strip()
+                            for item in privileged_explicit
+                            if str(item).strip()
+                        ]
                 return None
 
         configured = extra.get(policy_key)
@@ -1374,7 +1427,12 @@ class TelegramAdapter(BasePlatformAdapter):
                 user_id or "<unknown>",
             )
             return []
-        return [str(item).strip() for item in configured if str(item).strip()]
+        result = [str(item).strip() for item in configured if str(item).strip()]
+        if explicit_scratchpad:
+            for item in scratchpad_toolsets:
+                if item not in result:
+                    result.append(item)
+        return result
 
     def _source_from_message_for_auth(self, message: Message):
         """Build the same Telegram source shape the gateway auth path expects.

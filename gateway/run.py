@@ -23405,6 +23405,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         user_config: dict,
         source: "SessionSource",
         platform_key: str,
+        prompt: Optional[str] = None,
     ) -> list:
         """Resolve enabled toolsets for an agent run, honoring per-source overrides.
 
@@ -23422,7 +23423,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         try:
             adapter = self._adapter_for_source(source)
             if adapter is not None:
-                override = adapter.toolsets_for_source(source)
+                try:
+                    override = adapter.toolsets_for_source(source, prompt=prompt)
+                except TypeError:
+                    # Compatibility for third-party adapters implementing the
+                    # original one-argument hook.
+                    override = adapter.toolsets_for_source(source)
         except Exception:
             override = None
 
@@ -23480,7 +23486,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             platform_key = _platform_config_key(source.platform)
 
             enabled_toolsets = self._resolve_enabled_toolsets_for_source(
-                user_config, source, platform_key
+                user_config, source, platform_key, prompt
             )
             agent_cfg = user_config.get("agent") or {}
             from agent.skill_utils import parse_config_string_list
@@ -29131,7 +29137,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         platform_key = _platform_config_key(source.platform)
 
         enabled_toolsets = self._resolve_enabled_toolsets_for_source(
-            user_config, source, platform_key
+            user_config, source, platform_key, message
         )
         agent_cfg_local = user_config.get("agent") or {}
         from agent.skill_utils import parse_config_string_list

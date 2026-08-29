@@ -7374,13 +7374,23 @@ class BasePlatformAdapter(ABC):
         """
         pass
 
-    def toolsets_for_source(self, source: "SessionSource") -> Optional[List[str]]:
+    def toolsets_for_source(
+        self,
+        source: "SessionSource",
+        *,
+        prompt: Optional[str] = None,
+    ) -> Optional[List[str]]:
         """Per-source toolset override for agent runs triggered by this adapter.
 
         Return a list of configurable toolset keys (e.g. ``["terminal",
         "file", "web"]``) to REPLACE the platform-level toolset resolution
-        for this specific source, or ``None`` to use the normal
+        for this specific source/turn, or ``None`` to use the normal
         ``platform_toolsets.<platform>`` resolution (the default).
+
+        ``prompt`` is the live user-authored turn text when available. Route
+        adapters may use it only for fail-closed, content-gated capability
+        mounting (for example an explicit archive-search command); ordinary
+        route policy should depend on authenticated source metadata.
 
         The gateway validates the returned list through the same
         ``_get_platform_tools`` path as platform-level config, so unknown or
