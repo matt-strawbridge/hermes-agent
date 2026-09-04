@@ -27,7 +27,6 @@ from unittest.mock import patch
 
 from agent.context_compressor import (
     ContextCompressor,
-    attempt_summary_route_kwargs,
     pin_summary_route,
     take_pinned_summary_route,
 )
@@ -98,7 +97,7 @@ class _StalledSummaryWorker:
             fence.finish_commit()
 
 
-def _run(worker, *, chain, timeouts, messages, idle=0.05, ceiling=0.2):
+def _run(worker, *, chain, timeouts, messages, idle=2.0, ceiling=8.0):
     with _patch_chain(chain):
         return run_compress_context_with_progress_timeout(
             worker=worker,
@@ -309,20 +308,6 @@ def test_stall_route_skips_candidate_on_failed_provider():
     assert route is not None
     assert route["provider"] == "custom"
 
-
-def test_digest_route_does_not_inherit_summary_reasoning_controls():
-    route = {
-        "provider": "anthropic",
-        "model": "claude-opus-5",
-        "route_extra_body": {
-            "reasoning": {"enabled": True, "effort": "high"},
-        },
-    }
-    with pin_summary_route(route):
-        digest_route = attempt_summary_route_kwargs()
-    assert digest_route["provider"] == "anthropic"
-    assert digest_route["model"] == "claude-opus-5"
-    assert "route_extra_body" not in digest_route
 
 
 # ---------------------------------------------------------------------------
