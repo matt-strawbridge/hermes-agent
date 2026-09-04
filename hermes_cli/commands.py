@@ -1116,22 +1116,26 @@ def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str
         (menu_commands, hidden_count) where hidden_count is the number of
         commands omitted due to the cap.
     """
-    core_commands = _prioritize_telegram_menu_commands(list(telegram_bot_commands()))
+    core_commands = list(telegram_bot_commands())
     reserved_names = {n for n, _ in core_commands}
-    all_commands = list(core_commands)
-    hidden_core_count = max(0, len(all_commands) - max_commands)
-
-    remaining_slots = max(0, max_commands - len(all_commands))
+    # Collect skills before applying the final cap. This lets an explicitly
+    # configured command-menu priority promote selected skills above lower
+    # priority core commands. Previously priorities were applied to the core
+    # list alone, so naming a skill in ``command_menu.priority`` had no effect
+    # whenever core commands already filled the menu.
     entries, hidden_count = _collect_gateway_skill_entries(
         platform="telegram",
-        max_slots=remaining_slots,
+        max_slots=_TELEGRAM_BOT_API_MAX_COMMANDS,
         reserved_names=reserved_names,
         desc_limit=40,
         sanitize_name=_sanitize_telegram_name,
     )
     # Drop the cmd_key — Telegram only needs (name, desc) pairs.
+    all_commands = list(core_commands)
     all_commands.extend((n, d) for n, d, _k in entries)
-    return all_commands[:max_commands], hidden_count + hidden_core_count
+    all_commands = _prioritize_telegram_menu_commands(all_commands)
+    hidden_overflow = max(0, len(all_commands) - max_commands)
+    return all_commands[:max_commands], hidden_count + hidden_overflow
 
 
 def discord_skill_commands(

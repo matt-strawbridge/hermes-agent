@@ -9607,6 +9607,67 @@ class TelegramAdapter(BasePlatformAdapter):
                     return True
         return False
 
+    async def _maybe_handle_literal_trigger_reply(self, message: Message) -> bool:
+        """Send a deterministic scoped reply for a configured literal token.
+
+        ``extra.literal_trigger_replies`` is a list of mappings with ``trigger``,
+        ``reply``, and optional ``chat_id`` / ``thread_id`` fields. A matching
+        text message is consumed before the agent path, which is useful for
+        notification macros where an LLM response would be incorrect.
+        """
+        entries = self.config.extra.get("literal_trigger_replies", [])
+        if not isinstance(entries, list) or not entries or not self._bot:
+            return False
+
+        text = getattr(message, "text", None)
+        chat = getattr(message, "chat", None)
+        if not text or not chat:
+            return False
+
+        chat_id = str(getattr(chat, "id", ""))
+        raw_thread_id = getattr(message, "message_thread_id", None)
+        thread_id = self._effective_message_thread_id(message)
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            configured_chat_id = entry.get("chat_id")
+            if configured_chat_id is not None and str(configured_chat_id) != chat_id:
+                continue
+            configured_thread_id = entry.get("thread_id")
+            if configured_thread_id is not None and str(configured_thread_id) != str(thread_id):
+                continue
+
+            trigger = str(entry.get("trigger") or "").strip()
+            reply = str(entry.get("reply") or "").strip()
+            if not trigger or not reply:
+                continue
+            if not re.search(rf"(?<!\w){re.escape(trigger)}(?!\w)", text, re.IGNORECASE):
+                continue
+
+            send_kwargs: Dict[str, Any] = {
+                "chat_id": normalize_telegram_chat_id(chat_id),
+                "text": reply,
+                "parse_mode": ParseMode.MARKDOWN,
+                "reply_to_message_id": getattr(message, "message_id", None),
+                "protect_content": self._protect_content_enabled,
+                **self._link_preview_kwargs(),
+            }
+            # General-topic messages arrive with no raw message_thread_id even
+            # though their normalized routing id is 1. Replying to the source
+            # message keeps the response in General; do not manufacture a
+            # message_thread_id Telegram did not provide.
+            if raw_thread_id is not None:
+                send_kwargs["message_thread_id"] = int(raw_thread_id)
+            await self._bot.send_message(**send_kwargs)
+            logger.info(
+                "[Telegram] Consumed literal trigger %r in chat=%s thread=%s",
+                trigger,
+                chat_id,
+                thread_id,
+            )
+            return True
+        return False
+
     def _is_guest_mention(self, message: Message) -> bool:
         """Return True for the narrow guest-mode bypass: explicit bot mention.
 
@@ -10115,6 +10176,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(msg, "from_user", None), "id", None),
                 getattr(getattr(msg, "chat", None), "id", None),
             )
+            return
+        if await self._maybe_handle_literal_trigger_reply(msg):
             return
         if not self._should_process_message(msg):
             if self._should_observe_unmentioned_group_message(msg):

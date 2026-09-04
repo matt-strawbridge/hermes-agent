@@ -660,6 +660,39 @@ class TestDiscordSkillCmdKeyDispatch:
 class TestTelegramMenuCommands:
     """Integration: telegram_menu_commands enforces the 32-char limit."""
 
+    def test_configured_priority_can_promote_skill_above_core_cap(self, tmp_path, monkeypatch):
+        """A prioritized skill remains visible even when core commands fill the cap."""
+        from unittest.mock import patch
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text(
+            "platforms:\n"
+            "  telegram:\n"
+            "    extra:\n"
+            "      command_menu:\n"
+            "        priority_mode: replace\n"
+            "        priority: [featured_skill, help]\n"
+        )
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        fake_cmds = {
+            "/featured-skill": {
+                "name": "featured-skill",
+                "description": "Featured",
+                "skill_md_path": f"{skills_dir}/featured-skill/SKILL.md",
+                "skill_dir": f"{skills_dir}/featured-skill",
+            }
+        }
+
+        with (
+            patch("agent.skill_commands.get_skill_commands", return_value=fake_cmds),
+            patch("tools.skills_tool.SKILLS_DIR", skills_dir),
+        ):
+            menu, hidden = telegram_menu_commands(max_commands=2)
+
+        assert [name for name, _ in menu] == ["featured_skill", "help"]
+        assert hidden > 0
+
 
 
 
